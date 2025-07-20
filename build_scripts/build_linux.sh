@@ -100,3 +100,40 @@ pyinstaller "${SPEC_FILE}"
 echo "Build complete. Your executable is located in: dist/MiFlashX"
 echo "To run: ./dist/MiFlashX"
 echo "To make executable: chmod +x dist/MiFlashX"
+
+# --- NEW STEP: Test Run the Compiled Executable ---
+echo "Attempting to run the compiled executable for a quick test..."
+EXECUTABLE_PATH="./dist/MiFlashX"
+TEST_LOG_FILE="test_run_output.log"
+
+if [ -f "${EXECUTABLE_PATH}" ]; then
+    chmod +x "${EXECUTABLE_PATH}" # Ensure it's executable
+    echo "Running ${EXECUTABLE_PATH} and redirecting output to ${TEST_LOG_FILE}..."
+    # Run in background with a timeout to prevent hanging, and capture output
+    # `timeout` command is useful in CI environments
+    timeout 10s "${EXECUTABLE_PATH}" > "${TEST_LOG_FILE}" 2>&1 &
+    PID=$! # Get the process ID of the background process
+
+    echo "Executable started with PID ${PID}. Waiting 5 seconds for it to initialize..."
+    sleep 5 # Give it a few seconds to start up and potentially crash
+
+    # Check if the process is still running
+    if ps -p $PID > /dev/null; then
+        echo "Executable appears to be running. Sending SIGTERM to gracefully stop it."
+        kill $PID
+        wait $PID || true # Wait for it to terminate, `|| true` prevents script from exiting if kill fails
+        echo "Executable stopped."
+        echo "Test run successful (application launched and terminated)."
+        echo "Check '${TEST_LOG_FILE}' for any captured output."
+    else
+        echo "Executable terminated unexpectedly or failed to start."
+        echo "Test run FAILED. Please check '${TEST_LOG_FILE}' for details."
+        cat "${TEST_LOG_FILE}" # Print the log content to console for immediate debugging
+        exit 1 # Fail the build script if the test run fails
+    fi
+else
+    echo "Error: Compiled executable not found at ${EXECUTABLE_PATH}. Build likely failed."
+    exit 1
+fi
+
+echo "Build and test process completed."
