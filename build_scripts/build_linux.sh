@@ -27,7 +27,7 @@ sudo apt-get install -y --no-install-recommends \
     libxcb-shape0 \
     libxcb-xkb1 \
     libxcb-cursor0 \
-    mesa-utils # This often pulls in necessary GL/EGL runtimes
+    mesa-utils
 
 
 # Install PyInstaller, PyQt6, Pillow if they are not already installed
@@ -118,8 +118,8 @@ echo "-----------------------------------------"
 # --- STEP 3: Build using the MODIFIED .spec file ---
 echo "Starting PyInstaller build using the modified .spec file..."
 # Now, run PyInstaller using the generated and modified .spec file.
-# All options are now contained within the .spec file.
-pyinstaller "${SPEC_FILE}"
+# Crucial change: Add --debug=imports here
+pyinstaller --debug=imports "${SPEC_FILE}"
 
 echo "Build complete. Your executable is located in: dist/MiFlashX"
 echo "To run: ./dist/MiFlashX"
