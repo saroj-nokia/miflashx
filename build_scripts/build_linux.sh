@@ -69,7 +69,7 @@ rm -f "${PLATFORM_TOOLS_ZIP}"
 chmod +x platform-tools/adb platform-tools/fastboot
 echo "Android Platform Tools prepared."
 
-# --- NEW: Generate .spec file first ---
+# --- Generate initial .spec file ---
 echo "Generating initial PyInstaller .spec file..."
 # Use pyi-makespec to generate the spec file without building immediately.
 # We include all the flags here so they are written into the spec file.
@@ -86,16 +86,62 @@ pyinstaller --noconfirm \
             --specpath . \
             main.py
 
-# --- NEW: Modify the .spec file to add the current directory to pathex ---
-echo "Modifying MiFlashX.spec to ensure module paths are correct..."
+# --- NEW: Modify the .spec file using Python ---
+echo "Modifying MiFlashX.spec to explicitly add project root to pathex..."
 SPEC_FILE="MiFlashX.spec"
-# The 'pathex' variable in the .spec file tells PyInstaller where to look for Python source files.
-# We insert the absolute path of the project root into this list.
-# This sed command finds the `pathex=` line and inserts `'$PROJECT_ROOT', ` at the beginning of the list.
-# It handles cases where the list is empty or already contains paths.
-sed -i "s|pathex=\\[|pathex=['$PROJECT_ROOT', |" "${SPEC_FILE}"
+PYTHON_SCRIPT_TO_MODIFY_SPEC=$(cat <<EOF
+import re
+import os
 
-# --- NEW: Build using the modified .spec file ---
+spec_path = "${SPEC_FILE}"
+project_root = os.path.abspath("${PROJECT_ROOT}") # Get absolute path for robustness
+
+with open(spec_path, 'r') as f:
+    content = f.read()
+
+# Pattern to find the Analysis call and its arguments
+# This pattern is more robust as it doesn't rely on specific whitespace around 'pathex=['
+pattern = re.compile(r"(a = Analysis\(\s*\[.*?\]\s*,\s*.*?pathex=\[)(.*?\])")
+
+def replace_pathex(match):
+    # Get the existing pathex content
+    existing_pathex = match.group(2)
+    # Remove any existing project_root if it was somehow added before
+    existing_pathex = existing_pathex.replace(f"'{project_root}', ", "").replace(f"'{project_root}'", "")
+    existing_pathex = existing_pathex.strip('[]').strip() # Remove brackets and extra spaces
+
+    # Construct the new pathex with project_root at the beginning
+    if existing_pathex:
+        new_pathex_content = f"'{project_root}', {existing_pathex}"
+    else:
+        new_pathex_content = f"'{project_root}'"
+
+    return f"{match.group(1)}{new_pathex_content}]"
+
+# Perform the replacement
+new_content = pattern.sub(replace_pathex, content, 1) # Only replace the first occurrence
+
+if new_content == content:
+    print("Warning: Could not find or modify 'pathex' in .spec file. Manual inspection needed.")
+    # Fallback if pattern matching fails, try appending if not found
+    if "pathex=[" not in content:
+        print("Attempting to append pathex if not found...")
+        # Find the Analysis call and insert pathex before the closing parenthesis
+        analysis_pattern = re.compile(r"(a = Analysis\(\s*\[.*?\](?:,\s*\S+?)*)(\))", re.DOTALL)
+        def append_pathex(match):
+            return f"{match.group(1)}, pathex=['{project_root}']{match.group(2)}"
+        new_content = analysis_pattern.sub(append_pathex, content, 1)
+
+
+with open(spec_path, 'w') as f:
+    f.write(new_content)
+
+print(f"Successfully modified {SPEC_FILE}.")
+EOF
+)
+python -c "${PYTHON_SCRIPT_TO_MODIFY_SPEC}"
+
+# --- Build using the modified .spec file ---
 echo "Starting PyInstaller build using the modified .spec file..."
 # Now, run PyInstaller using the generated and modified .spec file.
 # All options are now contained within the .spec file.
