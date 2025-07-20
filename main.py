@@ -1,8 +1,34 @@
 import sys
 import os
 from PyQt6.QtWidgets import QApplication, QMessageBox
+# Ensure these imports are after the sys.path modification below
+# from gui import MiFlashX # Will be imported later
+# from utils import log_message, get_os, find_adb_fastboot # Will be imported later
+
+# --- CRITICAL FIX FOR PYINSTALLER ONEFILE ModuleNotFoundError ---
+# When running as a PyInstaller onefile executable, the bundled files
+# are extracted to a temporary directory. We need to add this directory
+# to sys.path so that Python can find modules like 'gui', 'core', 'utils'.
+if getattr(sys, 'frozen', False):
+    # sys._MEIPASS is the path to the temporary directory where the bundle is extracted.
+    # This is the most reliable path for onefile bundles.
+    application_root_path = sys._MEIPASS
+    if application_root_path not in sys.path:
+        sys.path.insert(0, application_root_path)
+    # print(f"DEBUG: Added {application_root_path} to sys.path") # Uncomment for debugging build issues
+else:
+    # When running as a script, add the script's directory to sys.path
+    # This ensures local imports work correctly during development.
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    if script_dir not in sys.path:
+        sys.path.insert(0, script_dir)
+    # print(f"DEBUG: Added {script_dir} to sys.path") # Uncomment for debugging build issues
+# -----------------------------------------------------------------
+
+# Now that sys.path is correctly set, import your local modules
 from gui import MiFlashX
 from utils import log_message, get_os, find_adb_fastboot # Import utility functions
+
 
 def main():
     # Only run on Linux as this version is Linux-specific
@@ -21,6 +47,7 @@ def main():
 
     # Determine the base path for bundled tools
     # If frozen (PyInstaller bundle), use _MEIPASS. Otherwise, use current script's directory.
+    # This logic is already correct for platform-tools.
     base_path = getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS') and sys._MEIPASS or \
                 os.path.dirname(os.path.abspath(__file__))
     
