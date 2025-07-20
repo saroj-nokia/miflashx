@@ -7,21 +7,21 @@ set -e
 echo "Starting MiFlashX Linux build process..."
 
 # Navigate to the root of your project (one level up from build_scripts)
-cd "$(dirname "$0")/.."
+PROJECT_ROOT="$(dirname "$0")/.."
+cd "${PROJECT_ROOT}"
 
 # Ensure Python virtual environment is activated if you use one
 # source venv/bin/activate # Uncomment if you're using a virtual environment
 
-# Install PyInstaller and PyQt6 if they are not already installed
+# Install PyInstaller, PyQt6, Pillow if they are not already installed
 echo "Installing/updating Python dependencies..."
-pip install pyinstaller PyQt6 Pillow # Pillow is needed for generate_icon.py
+pip install pyinstaller PyQt6 Pillow
 
 # Remove previous build artifacts
 echo "Cleaning up previous build artifacts..."
-rm -rf build dist MiFlashX.spec  # Remove build directory, dist directory, and the .spec file
+rm -rf build dist MiFlashX.spec # Remove build directory, dist directory, and the .spec file
 
-# --- NEW STEP: Generate Application Icon ---
-# This ensures that 'assets/icon.png' exists before PyInstaller tries to bundle it.
+# --- Generate Application Icon ---
 echo "Generating application icon..."
 python generate_icon.py
 
@@ -69,18 +69,10 @@ rm -f "${PLATFORM_TOOLS_ZIP}"
 chmod +x platform-tools/adb platform-tools/fastboot
 echo "Android Platform Tools prepared."
 
-echo "Starting PyInstaller build..."
-# Build with PyInstaller
-# --noconfirm: Don't ask for confirmation to overwrite dist/build
-# --onefile: Creates a single executable file
-# --windowed: Hides the console window (important for GUI apps)
-# --name MiFlashX: Sets the executable name in the dist/ directory
-# --icon assets/icon.png: Specifies the application icon
-# --add-data "source:destination_in_bundle": Adds data files to the bundle.
-#   - "assets:assets": Copies the 'assets' directory to 'assets' inside the bundle.
-#   - "platform-tools:platform-tools": Copies our platform-tools directory into the bundle.
-# --hidden-import: Explicitly tells PyInstaller to include these modules.
-#                  This is crucial for cases where auto-analysis might miss them.
+# --- NEW: Generate .spec file first ---
+echo "Generating initial PyInstaller .spec file..."
+# Use pyi-makespec to generate the spec file without building immediately.
+# We include all the flags here so they are written into the spec file.
 pyinstaller --noconfirm \
             --onefile \
             --windowed \
@@ -91,7 +83,23 @@ pyinstaller --noconfirm \
             --hidden-import=utils \
             --hidden-import=core \
             --hidden-import=gui \
+            --specpath . \
             main.py
+
+# --- NEW: Modify the .spec file to add the current directory to pathex ---
+echo "Modifying MiFlashX.spec to ensure module paths are correct..."
+SPEC_FILE="MiFlashX.spec"
+# The 'pathex' variable in the .spec file tells PyInstaller where to look for Python source files.
+# We insert the absolute path of the project root into this list.
+# This sed command finds the `pathex=` line and inserts `'$PROJECT_ROOT', ` at the beginning of the list.
+# It handles cases where the list is empty or already contains paths.
+sed -i "s|pathex=\\[|pathex=['$PROJECT_ROOT', |" "${SPEC_FILE}"
+
+# --- NEW: Build using the modified .spec file ---
+echo "Starting PyInstaller build using the modified .spec file..."
+# Now, run PyInstaller using the generated and modified .spec file.
+# All options are now contained within the .spec file.
+pyinstaller "${SPEC_FILE}"
 
 echo "Build complete. Your executable is located in: dist/MiFlashX"
 echo "To run: ./dist/MiFlashX"
