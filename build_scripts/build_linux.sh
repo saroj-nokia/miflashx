@@ -28,24 +28,42 @@ python generate_icon.py
 # --- Download and prepare Android Platform Tools ---
 echo "Downloading and preparing Android Platform Tools..."
 PLATFORM_TOOLS_URL="https://dl.google.com/android/repository/platform-tools-latest-linux.zip"
+PLATFORM_TOOLS_ZIP="platform-tools.zip"
+TEMP_EXTRACT_DIR="temp_platform_tools_extract" # A new temporary directory for extraction
 
-# Create the directory for platform-tools if it doesn't exist
-mkdir -p platform-tools
+# Clean up previous 'platform-tools' directory if it exists to ensure a fresh start
+if [ -d "platform-tools" ]; then
+    echo "Cleaning up existing 'platform-tools' directory..."
+    rm -rf platform-tools
+fi
+mkdir -p platform-tools # Recreate the clean target directory
+
+# Create a temporary directory for extraction
+mkdir -p "${TEMP_EXTRACT_DIR}"
 
 # Download the zip file
 echo "Downloading Android Platform Tools from ${PLATFORM_TOOLS_URL}..."
-curl -L ${PLATFORM_TOOLS_URL} -o platform-tools.zip
+curl -L ${PLATFORM_TOOLS_URL} -o "${PLATFORM_TOOLS_ZIP}"
 
-# Unzip the contents into the platform-tools directory
-echo "Extracting platform-tools.zip..."
-unzip -q platform-tools.zip -d platform-tools/
+# Unzip the contents into the temporary directory
+echo "Extracting ${PLATFORM_TOOLS_ZIP} to ${TEMP_EXTRACT_DIR}..."
+unzip -q "${PLATFORM_TOOLS_ZIP}" -d "${TEMP_EXTRACT_DIR}"
 
-# The zip usually extracts to a nested 'platform-tools/platform-tools/' directory.
-# Move contents up one level and remove the nested directory.
-if [ -d "platform-tools/platform-tools" ]; then
-    mv platform-tools/platform-tools/* platform-tools/
-    rmdir platform-tools/platform-tools
+# The zip usually extracts to a nested 'temp_platform_tools_extract/platform-tools/' directory.
+# Move contents from the nested directory to the final 'platform-tools/' directory.
+# Check if the nested directory exists before moving
+if [ -d "${TEMP_EXTRACT_DIR}/platform-tools" ]; then
+    echo "Moving extracted tools from nested directory to final 'platform-tools' directory..."
+    mv "${TEMP_EXTRACT_DIR}/platform-tools"/* platform-tools/
+else
+    echo "Warning: Nested 'platform-tools' directory not found in temporary extraction. Assuming flat structure."
+    mv "${TEMP_EXTRACT_DIR}"/* platform-tools/ # Fallback for unexpected zip structure
 fi
+
+# Clean up temporary extraction directory and zip file
+echo "Cleaning up temporary files..."
+rm -rf "${TEMP_EXTRACT_DIR}"
+rm -f "${PLATFORM_TOOLS_ZIP}"
 
 # Ensure adb and fastboot binaries are executable
 chmod +x platform-tools/adb platform-tools/fastboot
@@ -74,11 +92,6 @@ pyinstaller --noconfirm \
             --hidden-import=core \
             --hidden-import=gui \
             main.py
-
-# Clean up temporary platform-tools directory (optional, as they are now bundled)
-# rm -rf platform-tools-temp # This line was for a temp dir, but we're now using the main platform-tools dir.
-# If you want to delete the *original* platform-tools folder after bundling, uncomment and adjust:
-# rm -rf platform-tools
 
 echo "Build complete. Your executable is located in: dist/MiFlashX"
 echo "To run: ./dist/MiFlashX"
