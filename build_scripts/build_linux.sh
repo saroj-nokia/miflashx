@@ -14,10 +14,28 @@ cd "${PROJECT_ROOT}"
 # source venv/bin/activate # Uncomment if you're using a virtual environment
 
 # Install system-level dependencies for graphics (important for PyQt6 on Linux)
-# These are common packages that provide libEGL.so.1 and other OpenGL libraries.
+# These packages provide libEGL.so.1, libGL.so.1, and other OpenGL libraries.
+# Using 'libgl1-mesa-dev' and 'libegl1-mesa-dev' or 'libgl-dev' which are more generic.
+# For Ubuntu 24.04, the package names might be slightly different or need broader dependencies.
 echo "Installing system-level graphics dependencies for the build environment..."
 sudo apt-get update
-sudo apt-get install -y libegl1-mesa libgl1-mesa-glx
+# Try common packages that provide EGL/OpenGL runtime libraries
+sudo apt-get install -y --no-install-recommends \
+    libgl1-mesa-dev \
+    libegl1-mesa-dev \
+    libxkbcommon-x11-0 \
+    libxcb-icccm4 \
+    libxcb-image0 \
+    libxcb-keysyms1 \
+    libxcb-render-util0 \
+    libxcb-shape0 \
+    libxcb-xkb1 \
+    libxcb-cursor0 \
+    mesa-utils # This often pulls in necessary GL/EGL runtimes
+
+
+# If the above still fails, uncomment the following and try more generic 'libgl-dev'
+# sudo apt-get install -y --no-install-recommends libgl-dev libegl-dev
 
 # Install PyInstaller, PyQt6, Pillow if they are not already installed
 echo "Installing/updating Python dependencies..."
@@ -118,15 +136,7 @@ if [ -f "${EXECUTABLE_PATH}" ]; then
     chmod +x "${EXECUTABLE_PATH}" # Ensure it's executable
     echo "Running ${EXECUTABLE_PATH} and redirecting output to ${TEST_LOG_FILE}..."
 
-    # This is important for GUI apps in headless CI environments.
-    # It tells Qt to use a minimal platform plugin that doesn't require a full display server.
-    # However, for a user's desktop, 'xcb' is usually preferred.
-    # For the test run, if it's a headless environment, 'offscreen' or 'minimal' might be needed.
-    # Since the error is libEGL, it's about the GL backend.
-    # Let's try to explicitly set a platform and add a common Qt plugin path if needed.
-    
-    # Try setting QT_QPA_PLATFORM to 'offscreen' for CI testing, as it avoids display issues.
-    # If the app still needs EGL, it might still fail, but this is a common CI workaround.
+    # Set QT_QPA_PLATFORM to 'offscreen' for CI testing, as it avoids display issues.
     export QT_QPA_PLATFORM=offscreen
     
     # Run in background with a timeout to prevent hanging, and capture output
@@ -152,7 +162,4 @@ if [ -f "${EXECUTABLE_PATH}" ]; then
     fi
 else
     echo "Error: Compiled executable not found at ${EXECUTABLE_PATH}. Build likely failed."
-    exit 1
-fi
-
-echo "Build and test process completed."
+    exit
