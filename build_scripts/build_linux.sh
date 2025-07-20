@@ -13,6 +13,12 @@ cd "${PROJECT_ROOT}"
 # Ensure Python virtual environment is activated if you use one
 # source venv/bin/activate # Uncomment if you're using a virtual environment
 
+# Install system-level dependencies for graphics (important for PyQt6 on Linux)
+# These are common packages that provide libEGL.so.1 and other OpenGL libraries.
+echo "Installing system-level graphics dependencies for the build environment..."
+sudo apt-get update
+sudo apt-get install -y libegl1-mesa libgl1-mesa-glx
+
 # Install PyInstaller, PyQt6, Pillow if they are not already installed
 echo "Installing/updating Python dependencies..."
 pip install pyinstaller PyQt6 Pillow
@@ -103,7 +109,7 @@ echo "Build complete. Your executable is located in: dist/MiFlashX"
 echo "To run: ./dist/MiFlashX"
 echo "To make executable: chmod +x dist/MiFlashX"
 
-# --- NEW STEP: Test Run the Compiled Executable ---
+# --- Test Run the Compiled Executable ---
 echo "Attempting to run the compiled executable for a quick test..."
 EXECUTABLE_PATH="./dist/MiFlashX"
 TEST_LOG_FILE="test_run_output.log"
@@ -112,27 +118,16 @@ if [ -f "${EXECUTABLE_PATH}" ]; then
     chmod +x "${EXECUTABLE_PATH}" # Ensure it's executable
     echo "Running ${EXECUTABLE_PATH} and redirecting output to ${TEST_LOG_FILE}..."
 
-    # Set QT_QPA_PLATFORM and LD_LIBRARY_PATH for the test run
-    # This helps the bundled app find its Qt libraries and use the correct platform plugin
-    # The _MEIPASS environment variable points to the temporary extraction directory
-    # where PyInstaller unpacks the onefile bundle at runtime.
-    export QT_QPA_PLATFORM=xcb
-    export LD_LIBRARY_PATH="${PROJECT_ROOT}/dist/MiFlashX.pkg/PyQt6/Qt6/lib:${LD_LIBRARY_PATH}" # This path might need adjustment based on PyInstaller's internal structure.
-    # A more robust way for LD_LIBRARY_PATH in a onefile bundle is to use sys._MEIPASS
-    # but that's only available *inside* the python process.
-    # For a shell test, we'll try to guess the path or rely on the system.
-    # Let's try to point it to the bundled Qt libraries more directly.
+    # This is important for GUI apps in headless CI environments.
+    # It tells Qt to use a minimal platform plugin that doesn't require a full display server.
+    # However, for a user's desktop, 'xcb' is usually preferred.
+    # For the test run, if it's a headless environment, 'offscreen' or 'minimal' might be needed.
+    # Since the error is libEGL, it's about the GL backend.
+    # Let's try to explicitly set a platform and add a common Qt plugin path if needed.
     
-    # The actual path to the bundled Qt libraries within the onefile temp dir is more complex.
-    # For a quick test, we'll rely on PyInstaller's internal setup, and just set QT_QPA_PLATFORM.
-    # If libEGL is still missing, it means it's a system dependency that PyInstaller *cannot* bundle.
-    
-    # Reverting LD_LIBRARY_PATH for the test as it's complex and often not the root cause for libEGL.
-    # The libEGL.so.1 error usually means the system's OpenGL/EGL drivers are missing or incompatible.
-    # PyInstaller generally bundles Qt's *own* libraries, but not system-level graphics drivers.
-    
-    # Let's try running without LD_LIBRARY_PATH for the test, as it's more representative of user experience.
-    # If it fails with libEGL.so.1, it's a target system dependency.
+    # Try setting QT_QPA_PLATFORM to 'offscreen' for CI testing, as it avoids display issues.
+    # If the app still needs EGL, it might still fail, but this is a common CI workaround.
+    export QT_QPA_PLATFORM=offscreen
     
     # Run in background with a timeout to prevent hanging, and capture output
     timeout 10s "${EXECUTABLE_PATH}" > "${TEST_LOG_FILE}" 2>&1 &
