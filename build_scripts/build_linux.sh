@@ -18,7 +18,6 @@ echo "Installing/updating Python dependencies..."
 pip install pyinstaller PyQt6 Pillow
 
 # Remove previous build artifacts to ensure a clean slate
-# This is safe and good practice in both local and CI environments.
 echo "Cleaning up previous build artifacts..."
 rm -rf build dist MiFlashX.spec # Remove build directory, dist directory, and the .spec file
 
@@ -71,9 +70,9 @@ chmod +x platform-tools/adb platform-tools/fastboot
 echo "Android Platform Tools prepared."
 
 # --- STEP 1: Generate initial .spec file using pyi-makespec ---
-# Use pyi-makespec to generate the spec file. This command does NOT build the executable.
+# Removed --noconfirm as it's not supported by pyi-makespec
 echo "Generating initial PyInstaller .spec file..."
-pyi-makespec --noconfirm \
+pyi-makespec \
              --onefile \
              --windowed \
              --name MiFlashX \
