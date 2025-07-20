@@ -14,34 +14,42 @@ cd "$(dirname "$0")/.."
 
 # Install PyInstaller and PyQt6 if they are not already installed
 echo "Installing/updating Python dependencies..."
-pip install pyinstaller PyQt6
+pip install pyinstaller PyQt6 Pillow # Pillow is needed for generate_icon.py
 
-# Remove previous build artifacts to ensure a clean build
+# Remove previous build artifacts
 echo "Cleaning up previous build artifacts..."
 rm -rf build dist MiFlashX.spec  # Remove build directory, dist directory, and the .spec file
 
-# Create a temporary directory to store the platform-tools binaries for bundling
-echo "Preparing platform-tools for bundling..."
-mkdir -p platform-tools-temp
+# --- NEW STEP: Generate Application Icon ---
+# This ensures that 'assets/icon.png' exists before PyInstaller tries to bundle it.
+echo "Generating application icon..."
+python generate_icon.py
 
-# Copy only the necessary Linux platform-tools binaries
-# Adjust these paths if your platform-tools structure is different
-if [ -f "platform-tools/adb" ]; then
-    cp -f platform-tools/adb platform-tools-temp/
-    echo "Copied platform-tools/adb"
-else
-    echo "Warning: platform-tools/adb not found. Build may fail or function incorrectly."
+# --- Download and prepare Android Platform Tools ---
+echo "Downloading and preparing Android Platform Tools..."
+PLATFORM_TOOLS_URL="https://dl.google.com/android/repository/platform-tools-latest-linux.zip"
+
+# Create the directory for platform-tools if it doesn't exist
+mkdir -p platform-tools
+
+# Download the zip file
+echo "Downloading Android Platform Tools from ${PLATFORM_TOOLS_URL}..."
+curl -L ${PLATFORM_TOOLS_URL} -o platform-tools.zip
+
+# Unzip the contents into the platform-tools directory
+echo "Extracting platform-tools.zip..."
+unzip -q platform-tools.zip -d platform-tools/
+
+# The zip usually extracts to a nested 'platform-tools/platform-tools/' directory.
+# Move contents up one level and remove the nested directory.
+if [ -d "platform-tools/platform-tools" ]; then
+    mv platform-tools/platform-tools/* platform-tools/
+    rmdir platform-tools/platform-tools
 fi
 
-if [ -f "platform-tools/fastboot" ]; then
-    cp -f platform-tools/fastboot platform-tools-temp/
-    echo "Copied platform-tools/fastboot"
-else
-    echo "Warning: platform-tools/fastboot not found. Build may fail or function incorrectly."
-fi
-
-# You might need to copy other supporting libraries depending on your specific adb/fastboot versions.
-# For most basic operations, adb and fastboot themselves are sufficient.
+# Ensure adb and fastboot binaries are executable
+chmod +x platform-tools/adb platform-tools/fastboot
+echo "Android Platform Tools prepared."
 
 echo "Starting PyInstaller build..."
 # Build with PyInstaller
@@ -52,21 +60,25 @@ echo "Starting PyInstaller build..."
 # --icon assets/icon.png: Specifies the application icon
 # --add-data "source:destination_in_bundle": Adds data files to the bundle.
 #   - "assets:assets": Copies the 'assets' directory to 'assets' inside the bundle.
-#   - "platform-tools-temp:platform-tools": Copies our temporary 'platform-tools-temp'
-#     directory into a 'platform-tools' directory inside the bundle's temporary execution environment (_MEIPASS).
-#     This path is then used by `main.py` to add to the system's PATH for the app.
+#   - "platform-tools:platform-tools": Copies our platform-tools directory into the bundle.
+# --hidden-import: Explicitly tells PyInstaller to include these modules.
+#                  This is crucial for cases where auto-analysis might miss them.
 pyinstaller --noconfirm \
             --onefile \
             --windowed \
             --name MiFlashX \
             --icon assets/icon.png \
             --add-data "assets:assets" \
-            --add-data "platform-tools-temp:platform-tools" \
+            --add-data "platform-tools:platform-tools" \
+            --hidden-import=utils \
+            --hidden-import=core \
+            --hidden-import=gui \
             main.py
 
-# Clean up temporary platform-tools directory
-echo "Cleaning up temporary platform-tools directory..."
-rm -rf platform-tools-temp
+# Clean up temporary platform-tools directory (optional, as they are now bundled)
+# rm -rf platform-tools-temp # This line was for a temp dir, but we're now using the main platform-tools dir.
+# If you want to delete the *original* platform-tools folder after bundling, uncomment and adjust:
+# rm -rf platform-tools
 
 echo "Build complete. Your executable is located in: dist/MiFlashX"
 echo "To run: ./dist/MiFlashX"
