@@ -17,7 +17,8 @@ cd "${PROJECT_ROOT}"
 echo "Installing/updating Python dependencies..."
 pip install pyinstaller PyQt6 Pillow
 
-# Remove previous build artifacts
+# Remove previous build artifacts to ensure a clean slate
+# This is safe and good practice in both local and CI environments.
 echo "Cleaning up previous build artifacts..."
 rm -rf build dist MiFlashX.spec # Remove build directory, dist directory, and the .spec file
 
@@ -69,24 +70,23 @@ rm -f "${PLATFORM_TOOLS_ZIP}"
 chmod +x platform-tools/adb platform-tools/fastboot
 echo "Android Platform Tools prepared."
 
-# --- Generate initial .spec file ---
+# --- STEP 1: Generate initial .spec file using pyi-makespec ---
+# Use pyi-makespec to generate the spec file. This command does NOT build the executable.
 echo "Generating initial PyInstaller .spec file..."
-# Use pyi-makespec to generate the spec file without building immediately.
-# We include all the flags here so they are written into the spec file.
-pyinstaller --noconfirm \
-            --onefile \
-            --windowed \
-            --name MiFlashX \
-            --icon assets/icon.png \
-            --add-data "assets:assets" \
-            --add-data "platform-tools:platform-tools" \
-            --hidden-import=utils \
-            --hidden-import=core \
-            --hidden-import=gui \
-            --specpath . \
-            main.py
+pyi-makespec --noconfirm \
+             --onefile \
+             --windowed \
+             --name MiFlashX \
+             --icon assets/icon.png \
+             --add-data "assets:assets" \
+             --add-data "platform-tools:platform-tools" \
+             --hidden-import=utils \
+             --hidden-import=core \
+             --hidden-import=gui \
+             --specpath . \
+             main.py
 
-# --- Corrected: Modify the .spec file using a temporary Python script ---
+# --- STEP 2: Modify the .spec file using a temporary Python script ---
 echo "Modifying MiFlashX.spec to explicitly add project root to pathex..."
 SPEC_FILE="MiFlashX.spec"
 TEMP_PYTHON_SCRIPT="modify_spec_temp.py"
@@ -154,7 +154,7 @@ python "${TEMP_PYTHON_SCRIPT}" "${PROJECT_ROOT}"
 # Clean up the temporary Python script
 rm "${TEMP_PYTHON_SCRIPT}"
 
-# --- Build using the modified .spec file ---
+# --- STEP 3: Build using the MODIFIED .spec file ---
 echo "Starting PyInstaller build using the modified .spec file..."
 # Now, run PyInstaller using the generated and modified .spec file.
 # All options are now contained within the .spec file.
