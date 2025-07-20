@@ -3,12 +3,15 @@ import re
 import os
 import sys
 
-def modify_spec_file(spec_file_path, project_root_path):
+def modify_spec_file(spec_file_path, project_root_path_arg):
     """
     Modifies the PyInstaller .spec file to explicitly add the project root
-    to the Analysis pathex, ensuring local modules are found.
+    to the Analysis pathex, ensuring local modules are found,
+    and enables debug imports in the EXE block.
     """
-    print(f"Modifying {spec_file_path} to explicitly add project root ({project_root_path}) to pathex...")
+    # Convert the passed project_root_path_arg to an absolute path immediately
+    project_root_abs_path = os.path.abspath(project_root_path_arg)
+    print(f"Modifying {spec_file_path} to explicitly add project root ({project_root_abs_path}) to pathex and enable debug imports...")
 
     try:
         with open(spec_file_path, 'r') as f:
@@ -17,58 +20,63 @@ def modify_spec_file(spec_file_path, project_root_path):
         print(f"Error: .spec file not found at {spec_file_path}")
         sys.exit(1)
 
-    # Pattern to find the Analysis call and its arguments
-    # This pattern is robust to whitespace and captures the content inside pathex=[]
-    pattern = re.compile(r"(a = Analysis\(\s*\[.*?\](?:,\s*.*?)*,\s*pathex=\[)(.*?\])")
+    # Pattern to find the Analysis call and its arguments for pathex
+    pattern_pathex = re.compile(r"(a = Analysis\(\s*\[.*?\](?:,\s*.*?)*,\s*pathex=\[)(.*?\])")
 
     def replace_pathex(match):
         existing_pathex_str = match.group(2)
         
-        # Safely parse the existing pathex list
-        # We strip both single and double quotes separately, which is robust
         existing_paths = [
-            p.strip().strip("'").strip('"') # Strip single quotes, then double quotes
+            p.strip().strip("'").strip('"')
             for p in existing_pathex_str.strip('[]').split(',')
-            if p.strip() # Ensure no empty strings from split
+            if p.strip()
         ]
 
-        # Ensure the project_root is not already in the list to avoid duplicates
-        if project_root_path not in existing_paths:
-            existing_paths.insert(0, project_root_path) # Add project_root at the beginning
+        if project_root_abs_path not in existing_paths:
+            existing_paths.insert(0, project_root_abs_path)
 
-        # Reconstruct the pathex string with single quotes around each path
         new_pathex_content = ', '.join([f"'{p}'" for p in existing_paths])
         
         return f"{match.group(1)}{new_pathex_content}]"
 
-    # Perform the replacement on the content
-    new_content = pattern.sub(replace_pathex, content, 1) # Only replace the first occurrence
+    new_content = pattern_pathex.sub(replace_pathex, content, 1)
 
-    # Fallback if the primary pattern matching fails (e.g., 'pathex' argument is missing entirely)
     if new_content == content:
         print("Warning: Could not find or modify 'pathex' in .spec file using primary pattern. Attempting to append.")
-        # Pattern to find the Analysis call and insert 'pathex' before its closing parenthesis
         analysis_pattern = re.compile(r"(a = Analysis\(\s*\[.*?\](?:,\s*\S+?)*)(\))", re.DOTALL)
         def append_pathex_if_missing(match):
-            # Only append if 'pathex=' was genuinely not found in the original match group
             if "pathex=" not in match.group(0):
-                return f"{match.group(1)}, pathex=['{project_root_path}']{match.group(2)}"
-            return match.group(0) # Return original if pathex was already there (shouldn't happen if primary failed)
+                return f"{match.group(1)}, pathex=['{project_root_abs_path}']{match.group(2)}"
+            return match.group(0)
         new_content = analysis_pattern.sub(append_pathex_if_missing, content, 1)
         if new_content == content:
             print("Error: Failed to modify .spec file. 'pathex' could not be found or appended. Manual inspection needed.")
-            sys.exit(1) # Exit with error if modification failed
+            sys.exit(1)
 
-    # Write the modified content back to the .spec file
+    # --- NEW: Inject debug=True into the EXE block ---
+    # Find the EXE call and insert 'debug=True'
+    # This regex looks for 'exe = EXE(' and then tries to insert debug=True
+    # before 'debug=False' or if 'debug' is missing.
+    # It's safer to target the 'debug=False' line and replace it.
+    exe_debug_pattern = re.compile(r"(exe = EXE\(\s*.*?,\s*debug=)False(,\s*.*?\))", re.DOTALL)
+    new_content = exe_debug_pattern.sub(r"\1True\2", new_content, 1)
+
+    # If debug=False wasn't found (e.g., debug line is missing or different),
+    # try to insert it after 'name='
+    if not exe_debug_pattern.search(content): # Check original content for debug=False
+        exe_name_pattern = re.compile(r"(name='MiFlashX',)(\s*.*?bootloader_ignore_signals=False,)", re.DOTALL)
+        new_content = exe_name_pattern.sub(r"\1\n    debug=True,\2", new_content, 1)
+        print("Injected 'debug=True' after 'name=' in EXE block.")
+    else:
+        print("Replaced 'debug=False' with 'debug=True' in EXE block.")
+
+
     with open(spec_file_path, 'w') as f:
         f.write(new_content)
 
     print(f"Successfully modified {spec_file_path}.")
 
 if __name__ == "__main__":
-    # The script expects two command-line arguments:
-    # 1. The path to the .spec file
-    # 2. The absolute path to the project root directory
     if len(sys.argv) != 3:
         print("Usage: python modify_spec.py <spec_file_path> <project_root_path>")
         sys.exit(1)
