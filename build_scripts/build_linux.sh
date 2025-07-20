@@ -86,21 +86,19 @@ pyinstaller --noconfirm \
             --specpath . \
             main.py
 
-# --- Corrected: Modify the .spec file using Python ---
+# --- Corrected: Modify the .spec file using a temporary Python script ---
 echo "Modifying MiFlashX.spec to explicitly add project root to pathex..."
-# Pass shell variables to Python script using environment variables or direct string interpolation
-# For direct string interpolation, ensure PROJECT_ROOT is correctly escaped if it contains spaces or special chars.
-# For simplicity, we'll pass it as an argument to the python script.
-python -c "
+SPEC_FILE="MiFlashX.spec"
+TEMP_PYTHON_SCRIPT="modify_spec_temp.py"
+
+# Write the Python script content to a temporary file
+cat > "${TEMP_PYTHON_SCRIPT}" <<EOF
 import re
 import os
 import sys
 
-spec_file = 'MiFlashX.spec'
-# Get project_root from command line argument (passed from shell)
-# If running locally, you might want to uncomment and use os.path.abspath(os.path.dirname(__file__))
-# to get the script's directory, but for this embedded script, argument is safer.
-project_root = sys.argv[1]
+spec_file = "${SPEC_FILE}"
+project_root = sys.argv[1] # Get project_root from command line argument
 
 with open(spec_file, 'r') as f:
     content = f.read()
@@ -115,11 +113,6 @@ def replace_pathex(match):
     existing_pathex_str = match.group(2)
     
     # Safely parse the existing pathex list
-    # Use ast.literal_eval for more robust parsing if the list could be complex,
-    # but for simple string paths, string manipulation is fine.
-    # For now, let's assume it's a simple list of strings or empty.
-    
-    # Remove brackets and split by comma to get individual path strings
     existing_paths = [p.strip().strip(\"'\") for p in existing_pathex_str.strip('[]').split(',') if p.strip()]
 
     # Ensure the project_root is not already in the list
@@ -153,7 +146,13 @@ with open(spec_file, 'w') as f:
     f.write(new_content)
 
 print(f\"Successfully modified {spec_file}.\")
-" "${PROJECT_ROOT}" # Pass PROJECT_ROOT as a command-line argument to the Python script
+EOF
+
+# Execute the temporary Python script
+python "${TEMP_PYTHON_SCRIPT}" "${PROJECT_ROOT}"
+
+# Clean up the temporary Python script
+rm "${TEMP_PYTHON_SCRIPT}"
 
 # --- Build using the modified .spec file ---
 echo "Starting PyInstaller build using the modified .spec file..."
