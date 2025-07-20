@@ -14,12 +14,8 @@ cd "${PROJECT_ROOT}"
 # source venv/bin/activate # Uncomment if you're using a virtual environment
 
 # Install system-level dependencies for graphics (important for PyQt6 on Linux)
-# These packages provide libEGL.so.1, libGL.so.1, and other OpenGL libraries.
-# Using 'libgl1-mesa-dev' and 'libegl1-mesa-dev' or 'libgl-dev' which are more generic.
-# For Ubuntu 24.04, the package names might be slightly different or need broader dependencies.
 echo "Installing system-level graphics dependencies for the build environment..."
 sudo apt-get update
-# Try common packages that provide EGL/OpenGL runtime libraries
 sudo apt-get install -y --no-install-recommends \
     libgl1-mesa-dev \
     libegl1-mesa-dev \
@@ -33,9 +29,6 @@ sudo apt-get install -y --no-install-recommends \
     libxcb-cursor0 \
     mesa-utils # This often pulls in necessary GL/EGL runtimes
 
-
-# If the above still fails, uncomment the following and try more generic 'libgl-dev'
-# sudo apt-get install -y --no-install-recommends libgl-dev libegl-dev
 
 # Install PyInstaller, PyQt6, Pillow if they are not already installed
 echo "Installing/updating Python dependencies..."
@@ -117,6 +110,11 @@ SPEC_FILE="MiFlashX.spec"
 # Call the new Python script to modify the spec file, passing the spec file path and project root
 python modify_spec.py "${SPEC_FILE}" "${PROJECT_ROOT}"
 
+# --- INSPECTION STEP: Print the modified .spec file content ---
+echo "--- Contents of modified ${SPEC_FILE} ---"
+cat "${SPEC_FILE}"
+echo "-----------------------------------------"
+
 # --- STEP 3: Build using the MODIFIED .spec file ---
 echo "Starting PyInstaller build using the modified .spec file..."
 # Now, run PyInstaller using the generated and modified .spec file.
@@ -126,6 +124,15 @@ pyinstaller "${SPEC_FILE}"
 echo "Build complete. Your executable is located in: dist/MiFlashX"
 echo "To run: ./dist/MiFlashX"
 echo "To make executable: chmod +x dist/MiFlashX"
+
+# --- INSPECTION STEP: List contents of the build directory ---
+echo "--- Contents of build/MiFlashX/ (where modules are unpacked) ---"
+if [ -d "build/MiFlashX/" ]; then
+    ls -R build/MiFlashX/
+else
+    echo "Build directory 'build/MiFlashX/' not found. Build might have failed earlier."
+fi
+echo "-------------------------------------------------------------"
 
 # --- Test Run the Compiled Executable ---
 echo "Attempting to run the compiled executable for a quick test..."
@@ -162,4 +169,7 @@ if [ -f "${EXECUTABLE_PATH}" ]; then
     fi
 else
     echo "Error: Compiled executable not found at ${EXECUTABLE_PATH}. Build likely failed."
-    exit
+    exit 1
+fi
+
+echo "Build and test process completed."
