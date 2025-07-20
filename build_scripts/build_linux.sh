@@ -70,7 +70,7 @@ chmod +x platform-tools/adb platform-tools/fastboot
 echo "Android Platform Tools prepared."
 
 # --- STEP 1: Generate initial .spec file using pyi-makespec ---
-# Use pyi-makespec to generate the spec file. This command does NOT build the executable.
+# This command only generates the spec file, it does NOT build the executable.
 echo "Generating initial PyInstaller .spec file..."
 pyi-makespec \
              --onefile \
@@ -85,69 +85,16 @@ pyi-makespec \
              --specpath . \
              main.py
 
-# --- STEP 2: Modify the .spec file using a temporary Python script ---
+# --- STEP 2: Modify the .spec file using the standalone Python script ---
 echo "Modifying MiFlashX.spec to explicitly add project root to pathex..."
 SPEC_FILE="MiFlashX.spec"
-TEMP_PYTHON_SCRIPT="modify_spec_temp.py"
-
-# Write the Python script content to a temporary file
-# Crucial change: Escape the backslashes within Python string literals for Bash
-cat > "${TEMP_PYTHON_SCRIPT}" <<EOF
-import re
-import os
-import sys
-
-spec_file = "${SPEC_FILE}"
-project_root = sys.argv[1] # Get project_root from command line argument
-
-with open(spec_file, 'r') as f:
-    content = f.read()
-
-# Pattern to find the Analysis call and its arguments
-pattern = re.compile(r"(a = Analysis\(\s*\[.*?\](?:,\s*.*?)*,\s*pathex=\[)(.*?\])")
-
-def replace_pathex(match):
-    existing_pathex_str = match.group(2)
-    
-    # Safely parse the existing pathex list
-    # Escaping the inner single quotes for Python string literals
-    existing_paths = [p.strip().strip(\"'\") for p in existing_pathex_str.strip('[]').split(',') if p.strip()]
-
-    if project_root not in existing_paths:
-        existing_paths.insert(0, project_root)
-
-    new_pathex_content = ', '.join([f\"'{p}'\" for p in existing_paths])
-    
-    return f\"{match.group(1)}{new_pathex_content}]\"
-
-new_content = pattern.sub(replace_pathex, content, 1)
-
-if new_content == content:
-    print(\"Warning: Could not find or modify 'pathex' in .spec file. Attempting to append.\")
-    analysis_pattern = re.compile(r\"(a = Analysis\(\s*\[.*?\](?:,\s*\\S+?)*)(\))\", re.DOTALL)
-    def append_pathex_if_missing(match):
-        if \"pathex=\" not in match.group(0):
-            return f\"{match.group(1)}, pathex=['{project_root}']{match.group(2)}\"
-        return match.group(0)
-    new_content = analysis_pattern.sub(append_pathex_if_missing, content, 1)
-    if new_content == content:
-        print(\"Error: Failed to modify .spec file. 'pathex' could not be found or appended.\")
-        sys.exit(1)
-
-with open(spec_file, 'w') as f:
-    f.write(new_content)
-
-print(f\"Successfully modified {spec_file}.\")
-EOF
-
-# Execute the temporary Python script
-python "${TEMP_PYTHON_SCRIPT}" "${PROJECT_ROOT}"
-
-# Clean up the temporary Python script
-rm "${TEMP_PYTHON_SCRIPT}"
+# Call the new Python script to modify the spec file, passing the spec file path and project root
+python modify_spec.py "${SPEC_FILE}" "${PROJECT_ROOT}"
 
 # --- STEP 3: Build using the MODIFIED .spec file ---
 echo "Starting PyInstaller build using the modified .spec file..."
+# Now, run PyInstaller using the generated and modified .spec file.
+# All options are now contained within the .spec file.
 pyinstaller "${SPEC_FILE}"
 
 echo "Build complete. Your executable is located in: dist/MiFlashX"
