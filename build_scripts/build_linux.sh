@@ -86,60 +86,74 @@ pyinstaller --noconfirm \
             --specpath . \
             main.py
 
-# --- NEW: Modify the .spec file using Python ---
+# --- Corrected: Modify the .spec file using Python ---
 echo "Modifying MiFlashX.spec to explicitly add project root to pathex..."
-SPEC_FILE="MiFlashX.spec"
-PYTHON_SCRIPT_TO_MODIFY_SPEC=$(cat <<EOF
+# Pass shell variables to Python script using environment variables or direct string interpolation
+# For direct string interpolation, ensure PROJECT_ROOT is correctly escaped if it contains spaces or special chars.
+# For simplicity, we'll pass it as an argument to the python script.
+python -c "
 import re
 import os
+import sys
 
-spec_path = "${SPEC_FILE}"
-project_root = os.path.abspath("${PROJECT_ROOT}") # Get absolute path for robustness
+spec_file = 'MiFlashX.spec'
+# Get project_root from command line argument (passed from shell)
+# If running locally, you might want to uncomment and use os.path.abspath(os.path.dirname(__file__))
+# to get the script's directory, but for this embedded script, argument is safer.
+project_root = sys.argv[1]
 
-with open(spec_path, 'r') as f:
+with open(spec_file, 'r') as f:
     content = f.read()
 
 # Pattern to find the Analysis call and its arguments
 # This pattern is more robust as it doesn't rely on specific whitespace around 'pathex=['
-pattern = re.compile(r"(a = Analysis\(\s*\[.*?\]\s*,\s*.*?pathex=\[)(.*?\])")
+# It captures the part before 'pathex=[' and the content inside 'pathex=[]'
+pattern = re.compile(r"(a = Analysis\(\s*\[.*?\](?:,\s*.*?)*,\s*pathex=\[)(.*?\])")
 
 def replace_pathex(match):
-    # Get the existing pathex content
-    existing_pathex = match.group(2)
-    # Remove any existing project_root if it was somehow added before
-    existing_pathex = existing_pathex.replace(f"'{project_root}', ", "").replace(f"'{project_root}'", "")
-    existing_pathex = existing_pathex.strip('[]').strip() # Remove brackets and extra spaces
+    # Get the existing pathex content (everything inside the brackets)
+    existing_pathex_str = match.group(2)
+    
+    # Safely parse the existing pathex list
+    # Use ast.literal_eval for more robust parsing if the list could be complex,
+    # but for simple string paths, string manipulation is fine.
+    # For now, let's assume it's a simple list of strings or empty.
+    
+    # Remove brackets and split by comma to get individual path strings
+    existing_paths = [p.strip().strip(\"'\") for p in existing_pathex_str.strip('[]').split(',') if p.strip()]
 
-    # Construct the new pathex with project_root at the beginning
-    if existing_pathex:
-        new_pathex_content = f"'{project_root}', {existing_pathex}"
-    else:
-        new_pathex_content = f"'{project_root}'"
+    # Ensure the project_root is not already in the list
+    if project_root not in existing_paths:
+        existing_paths.insert(0, project_root) # Add project_root at the beginning
 
-    return f"{match.group(1)}{new_pathex_content}]"
+    # Reconstruct the pathex string
+    new_pathex_content = ', '.join([f\"'{p}'\" for p in existing_paths])
+    
+    return f\"{match.group(1)}{new_pathex_content}]\"
 
 # Perform the replacement
 new_content = pattern.sub(replace_pathex, content, 1) # Only replace the first occurrence
 
+# Fallback if pattern matching fails (e.g., pathex not found at all)
 if new_content == content:
-    print("Warning: Could not find or modify 'pathex' in .spec file. Manual inspection needed.")
-    # Fallback if pattern matching fails, try appending if not found
-    if "pathex=[" not in content:
-        print("Attempting to append pathex if not found...")
-        # Find the Analysis call and insert pathex before the closing parenthesis
-        analysis_pattern = re.compile(r"(a = Analysis\(\s*\[.*?\](?:,\s*\S+?)*)(\))", re.DOTALL)
-        def append_pathex(match):
-            return f"{match.group(1)}, pathex=['{project_root}']{match.group(2)}"
-        new_content = analysis_pattern.sub(append_pathex, content, 1)
+    print(\"Warning: Could not find or modify 'pathex' in .spec file. Attempting to append.\")
+    # Find the Analysis call and insert pathex before the closing parenthesis
+    analysis_pattern = re.compile(r\"(a = Analysis\(\s*\[.*?\](?:,\s*\S+?)*)(\))\", re.DOTALL)
+    def append_pathex_if_missing(match):
+        # Only append if pathex wasn't found in the original content
+        if \"pathex=\" not in match.group(0):
+            return f\"{match.group(1)}, pathex=['{project_root}']{match.group(2)}\"
+        return match.group(0) # Return original if pathex was already there
+    new_content = analysis_pattern.sub(append_pathex_if_missing, content, 1)
+    if new_content == content:
+        print(\"Error: Failed to modify .spec file. 'pathex' could not be found or appended.\")
+        sys.exit(1) # Exit with error if modification failed
 
-
-with open(spec_path, 'w') as f:
+with open(spec_file, 'w') as f:
     f.write(new_content)
 
-print(f"Successfully modified {SPEC_FILE}.")
-EOF
-)
-python -c "${PYTHON_SCRIPT_TO_MODIFY_SPEC}"
+print(f\"Successfully modified {spec_file}.\")
+" "${PROJECT_ROOT}" # Pass PROJECT_ROOT as a command-line argument to the Python script
 
 # --- Build using the modified .spec file ---
 echo "Starting PyInstaller build using the modified .spec file..."
