@@ -82,6 +82,8 @@ pyi-makespec \
              --hidden-import=utils \
              --hidden-import=core \
              --hidden-import=gui \
+             --collect-submodules PyQt6.QtXcbQpa \
+             --collect-data PyQt6.Qt \
              --specpath . \
              main.py
 
@@ -109,8 +111,30 @@ TEST_LOG_FILE="test_run_output.log"
 if [ -f "${EXECUTABLE_PATH}" ]; then
     chmod +x "${EXECUTABLE_PATH}" # Ensure it's executable
     echo "Running ${EXECUTABLE_PATH} and redirecting output to ${TEST_LOG_FILE}..."
+
+    # Set QT_QPA_PLATFORM and LD_LIBRARY_PATH for the test run
+    # This helps the bundled app find its Qt libraries and use the correct platform plugin
+    # The _MEIPASS environment variable points to the temporary extraction directory
+    # where PyInstaller unpacks the onefile bundle at runtime.
+    export QT_QPA_PLATFORM=xcb
+    export LD_LIBRARY_PATH="${PROJECT_ROOT}/dist/MiFlashX.pkg/PyQt6/Qt6/lib:${LD_LIBRARY_PATH}" # This path might need adjustment based on PyInstaller's internal structure.
+    # A more robust way for LD_LIBRARY_PATH in a onefile bundle is to use sys._MEIPASS
+    # but that's only available *inside* the python process.
+    # For a shell test, we'll try to guess the path or rely on the system.
+    # Let's try to point it to the bundled Qt libraries more directly.
+    
+    # The actual path to the bundled Qt libraries within the onefile temp dir is more complex.
+    # For a quick test, we'll rely on PyInstaller's internal setup, and just set QT_QPA_PLATFORM.
+    # If libEGL is still missing, it means it's a system dependency that PyInstaller *cannot* bundle.
+    
+    # Reverting LD_LIBRARY_PATH for the test as it's complex and often not the root cause for libEGL.
+    # The libEGL.so.1 error usually means the system's OpenGL/EGL drivers are missing or incompatible.
+    # PyInstaller generally bundles Qt's *own* libraries, but not system-level graphics drivers.
+    
+    # Let's try running without LD_LIBRARY_PATH for the test, as it's more representative of user experience.
+    # If it fails with libEGL.so.1, it's a target system dependency.
+    
     # Run in background with a timeout to prevent hanging, and capture output
-    # `timeout` command is useful in CI environments
     timeout 10s "${EXECUTABLE_PATH}" > "${TEST_LOG_FILE}" 2>&1 &
     PID=$! # Get the process ID of the background process
 
