@@ -105,7 +105,7 @@ pyi-makespec \
              main.py
 
 # --- STEP 2: Modify the .spec file using the standalone Python script ---
-echo "Modifying MiFlashX.spec to explicitly add project root to pathex..."
+echo "Modifying MiFlashX.spec to explicitly add project root to pathex and enable debug imports..."
 SPEC_FILE="MiFlashX.spec"
 # Call the new Python script to modify the spec file, passing the spec file path and project root
 python modify_spec.py "${SPEC_FILE}" "${PROJECT_ROOT}"
@@ -117,9 +117,8 @@ echo "-----------------------------------------"
 
 # --- STEP 3: Build using the MODIFIED .spec file ---
 echo "Starting PyInstaller build using the modified .spec file..."
-# Now, run PyInstaller using the generated and modified .spec file.
-# Crucial change: Add --debug=imports here
-pyinstaller --debug=imports "${SPEC_FILE}"
+# Removed --debug=imports from here, as it will be injected into the .spec file by modify_spec.py
+pyinstaller "${SPEC_FILE}"
 
 echo "Build complete. Your executable is located in: dist/MiFlashX"
 echo "To run: ./dist/MiFlashX"
