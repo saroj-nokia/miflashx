@@ -24,15 +24,18 @@ sudo dnf install -y \
     libX11-devel \
     libXau-devel \
     libXdmcp-devel \
-    libxcb-util-devel \
-    libxcb-image-devel \
-    libxcb-render-util-devel \
-    libxcb-cursor-devel \
-    libxcb-icccm-devel \
-    libxcb-keysyms-devel \
-    libxcb-xkb-devel \
+    # The following libxcb-*devel packages might be included in libxcb-devel
+    # or have slightly different names. Let's try the most common ones first.
+    # If errors persist, we might need to be more specific or find Fedora equivalents.
+    # Removed specific libxcb-*-devel as they might be covered by libxcb-devel
+    # or have different naming conventions on Fedora 42.
+    # If you still get 'No match for argument' for other XCB libs, you might need
+    # to find their exact Fedora package names (e.g., 'libxcb-util-devel' vs 'xcb-util-devel').
     mesa-dri-drivers \
-    mesa-vulkan-drivers # Often needed for modern Qt apps, especially on newer systems
+    mesa-vulkan-drivers \
+    # Adding some common Qt dependencies often needed on Fedora
+    qt6-qtbase-devel \
+    qt6-qtwayland-devel # If you use Wayland, otherwise not strictly necessary for XCB
 
 # Install PyInstaller, PyQt6, Pillow if they are not already installed
 echo "Installing/updating Python dependencies..."
@@ -47,7 +50,6 @@ echo "Generating application icon..."
 python generate_icon.py
 
 # --- Download and prepare Android Platform Tools ---
-# This section ensures platform-tools are downloaded and ready BEFORE PyInstaller bundles them.
 echo "Downloading and preparing Android Platform Tools..."
 PLATFORM_TOOLS_URL="https://dl.google.com/android/repository/platform-tools-latest-linux.zip"
 PLATFORM_TOOLS_ZIP="platform-tools.zip"
