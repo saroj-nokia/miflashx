@@ -47,6 +47,7 @@ echo "Generating application icon..."
 python generate_icon.py
 
 # --- Download and prepare Android Platform Tools ---
+# This section ensures platform-tools are downloaded and ready BEFORE PyInstaller bundles them.
 echo "Downloading and preparing Android Platform Tools..."
 PLATFORM_TOOLS_URL="https://dl.google.com/android/repository/platform-tools-latest-linux.zip"
 PLATFORM_TOOLS_ZIP="platform-tools.zip"
