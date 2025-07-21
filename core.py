@@ -5,18 +5,19 @@ import time
 from utils import log_message, get_os # Import necessary functions from utils
 
 class FlashingCore:
-    def __init__(self, rom_path, adb_path, fastboot_path, log_callback=None):
+    def __init__(self, rom_path, adb_path, fastboot_path, flash_mode, log_callback=None):
         """
         Initializes the FlashingCore with ROM path, ADB/Fastboot paths,
-        and an optional callback for logging progress.
+        the selected flash mode, and an optional callback for logging progress.
         """
         self.rom_path = rom_path
         self.adb_path = adb_path
         self.fastboot_path = fastboot_path
+        self.flash_mode = flash_mode # Store the selected flash mode
         self.log_callback = log_callback if log_callback else self._default_log_callback
         self.current_os = get_os()
 
-        log_message('info', f"FlashingCore initialized with ROM: {self.rom_path}")
+        log_message('info', f"FlashingCore initialized with ROM: {self.rom_path}, Mode: {self.flash_mode}")
         log_message('info', f"ADB Path: {self.adb_path}, Fastboot Path: {self.fastboot_path}")
         log_message('info', f"Operating System: {self.current_os}")
 
@@ -73,47 +74,53 @@ class FlashingCore:
         """
         Orchestrates the device flashing process.
         Finds the appropriate flash script (flash_all.sh or flash_all.bat)
-        and executes it.
+        based on the selected flash_mode and executes it.
         """
-        self.log_callback("Starting device flashing process...")
+        self.log_callback(f"Starting device flashing process with mode: {self.flash_mode}...")
 
-        # Construct path to the 'images' directory within the ROM folder
-        # Fastboot ROMs usually have a structure like:
-        # ROM_FOLDER/
-        #   images/
-        #     flash_all.sh (or .bat)
-        #     ... various .img files
-        
-        # Check for the 'images' subdirectory first, as scripts are often there
-        images_dir = os.path.join(self.rom_path, "images")
-        flash_script_path = None
-        script_name = ""
-        
+        # Determine the base script name based on the selected flash mode
+        script_base_name = ""
+        if self.flash_mode == "flash_all":
+            script_base_name = "flash_all"
+        elif self.flash_mode == "flash_all_except_data_storage":
+            script_base_name = "flash_all_except_data_storage"
+        elif self.flash_mode == "flash_all_lock":
+            script_base_name = "flash_all_lock"
+        else:
+            self.log_callback(f"Error: Unknown flash mode selected: {self.flash_mode}")
+            log_message('error', f"Unknown flash mode: {self.flash_mode}")
+            return False
+
+        # Append appropriate extension based on OS
         if self.current_os == "win32":
-            script_name = "flash_all.bat"
+            script_full_name = f"{script_base_name}.bat"
         elif self.current_os == "linux" or self.current_os == "darwin":
-            script_name = "flash_all.sh"
+            script_full_name = f"{script_base_name}.sh"
         else:
             self.log_callback(f"Error: Unsupported operating system: {self.current_os}")
             log_message('error', f"Unsupported OS for flashing: {self.current_os}")
             return False
 
+        # Construct path to the 'images' directory within the ROM folder
+        images_dir = os.path.join(self.rom_path, "images")
+        flash_script_path = None
+        
         # Prioritize script in 'images' directory
-        candidate_script_in_images = os.path.join(images_dir, script_name)
+        candidate_script_in_images = os.path.join(images_dir, script_full_name)
         if os.path.exists(candidate_script_in_images):
             flash_script_path = candidate_script_in_images
             self.log_callback(f"Found flash script in images directory: {flash_script_path}")
             log_message('info', f"Using script: {flash_script_path}")
         else:
             # Fallback: Check if the script is directly in the ROM root (less common for modern ROMs)
-            candidate_script_in_root = os.path.join(self.rom_path, script_name)
+            candidate_script_in_root = os.path.join(self.rom_path, script_full_name)
             if os.path.exists(candidate_script_in_root):
                 flash_script_path = candidate_script_in_root
                 self.log_callback(f"Found flash script in ROM root: {flash_script_path}")
                 log_message('info', f"Using script: {flash_script_path}")
             else:
-                self.log_callback(f"Error: Flashing script '{script_name}' not found in '{images_dir}' or '{self.rom_path}'.")
-                log_message('error', f"Flashing script '{script_name}' not found.")
+                self.log_callback(f"Error: Flashing script '{script_full_name}' not found in '{images_dir}' or '{self.rom_path}'.")
+                log_message('error', f"Flashing script '{script_full_name}' not found.")
                 return False
 
         # Ensure the script is executable on Linux/macOS
@@ -131,17 +138,13 @@ class FlashingCore:
         script_cwd = os.path.dirname(flash_script_path)
 
         # Execute the flashing script
-        # For .sh scripts, we run them directly. For .bat, we use 'cmd /c' on Windows.
         if self.current_os == "win32":
-            # On Windows, we need to run batch files via cmd.exe
-            command = ["cmd.exe", "/c", script_name]
-            # When using shell=True or cmd /c, the script_name needs to be just the name,
-            # and cwd handles the directory.
-            # However, since we're using Popen with a list of commands, it's safer
-            # to provide the full path to the script and let the shell handle it.
-            # Let's try running it directly with its full path and shell=True for bat files
-            # as they often rely on shell features.
-            return self._execute_command([flash_script_path], cwd=script_cwd, shell=True)
+            # For .bat files on Windows, running with shell=True is generally the most reliable
+            # as it correctly handles batch file syntax and environment variables like %~dp0
+            command = [flash_script_path] # Just the script path
+            return self._execute_command(command, cwd=script_cwd, shell=True)
         else: # Linux or macOS
-            # On Linux/macOS, we run shell scripts directly
-            return self._execute_command([flash_script_path], cwd=script_cwd, shell=False)
+            # For .sh scripts on Linux/macOS, run directly
+            command = [flash_script_path] # Just the script path
+            return self._execute_command(command, cwd=script_cwd, shell=False)
+
