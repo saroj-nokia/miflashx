@@ -1,281 +1,147 @@
 import os
-import tarfile
 import subprocess
-import re
-import time # For potential delays if needed
-
-# Import utility functions for logging and path finding
-from utils import log_message, get_os, find_adb_fastboot
+import sys
+import time
+from utils import log_message, get_os # Import necessary functions from utils
 
 class FlashingCore:
-    def __init__(self, output_callback=None):
+    def __init__(self, rom_path, adb_path, fastboot_path, log_callback=None):
         """
-        Initializes the FlashingCore.
-        :param output_callback: A function (level, message) to send log messages to the GUI.
+        Initializes the FlashingCore with ROM path, ADB/Fastboot paths,
+        and an optional callback for logging progress.
         """
-        self.output_callback = output_callback if output_callback else log_message
-        self.adb_path, self.fastboot_path = find_adb_fastboot()
-        
-        if not self.adb_path or not self.fastboot_path:
-            # This should ideally be caught by GUI's initial checks, but good to have here too
-            self.output_callback('error', "ADB or Fastboot executables not found. Please ensure they are in your PATH or bundled correctly.")
-            raise FileNotFoundError("ADB/Fastboot not found. Cannot initialize FlashingCore.")
+        self.rom_path = rom_path
+        self.adb_path = adb_path
+        self.fastboot_path = fastboot_path
+        self.log_callback = log_callback if log_callback else self._default_log_callback
+        self.current_os = get_os()
 
-    def _run_command(self, cmd_list, cwd=None, sudo_required=False):
+        log_message('info', f"FlashingCore initialized with ROM: {self.rom_path}")
+        log_message('info', f"ADB Path: {self.adb_path}, Fastboot Path: {self.fastboot_path}")
+        log_message('info', f"Operating System: {self.current_os}")
+
+    def _default_log_callback(self, message):
+        """Default log callback if none is provided."""
+        print(message) # Fallback to print if no GUI callback is set
+
+    def _execute_command(self, command, cwd=None, shell=False):
         """
-        Helper to run shell commands and stream output to the callback.
-        Handles sudo prefix if required.
-        :param cmd_list: List of command arguments.
-        :param cwd: Current working directory for the command.
-        :param sudo_required: Boolean, whether to prepend 'sudo' to the command.
+        Executes a shell command and logs its output.
+        Returns True on success, False on failure.
         """
-        if sudo_required:
-            if get_os() == "linux": # Sudo is primarily a Linux concept here
-                # Check if already running as root (e.g., if app launched with sudo)
-                if os.geteuid() == 0:
-                    log_message('info', f"Running command as root (already elevated): {' '.join(cmd_list)}")
-                else:
-                    cmd_list = ["sudo"] + cmd_list
-                    log_message('info', f"Executing with sudo: {' '.join(cmd_list)}")
-            else:
-                log_message('warning', f"Sudo requested but not on Linux: {' '.join(cmd_list)}")
-                
-        else:
-            log_message('info', f"Executing: {' '.join(cmd_list)}")
+        command_str = ' '.join(command) if isinstance(command, list) else command
+        self.log_callback(f"Executing command: {command_str}")
+        log_message('debug', f"Executing: {command_str} in CWD: {cwd}")
 
         try:
+            # Use subprocess.Popen for real-time output
             process = subprocess.Popen(
-                cmd_list,
+                command,
                 cwd=cwd,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True, # Decode output as text (UTF-8 by default)
-                bufsize=1, # Line-buffered output
-                # IMPORTANT: Close FDs in child process, crucial for PyInstaller --onefile on Linux
-                # Especially if parent process has many open FDs due to PyQt.
-                close_fds=True 
+                stderr=subprocess.STDOUT, # Redirect stderr to stdout
+                text=True, # Decode stdout/stderr as text
+                shell=shell # Use shell if command needs shell features (like wildcards)
             )
 
-            # Stream stdout and stderr to the callback
             for line in iter(process.stdout.readline, ''):
-                self.output_callback('info', line.strip())
-            for line in iter(process.stderr.readline, ''):
-                # Classify some stderr as warnings rather than errors if they are typical non-fatal fastboot messages
-                if "invalid sparse file header" in line.lower() or "erasing" in line.lower() or "sending" in line.lower():
-                    self.output_callback('warning', line.strip())
-                else:
-                    self.output_callback('error', line.strip())
+                self.log_callback(line.strip()) # Emit each line of output
+                log_message('debug', f"CMD Output: {line.strip()}")
 
             process.stdout.close()
-            process.stderr.close()
-            process.wait() # Wait for the process to terminate
+            return_code = process.wait()
 
-            if process.returncode != 0:
-                full_error_output = process.stdout.read() + process.stderr.read() # Capture any remaining output
-                raise subprocess.CalledProcessError(process.returncode, cmd_list, output=full_error_output)
-            return process.returncode
+            if return_code != 0:
+                self.log_callback(f"Command failed with exit code {return_code}")
+                log_message('error', f"Command '{command_str}' failed with exit code {return_code}")
+                return False
+            else:
+                self.log_callback(f"Command completed successfully.")
+                log_message('info', f"Command '{command_str}' completed successfully.")
+                return True
 
         except FileNotFoundError:
-            raise FileNotFoundError(f"Command not found: '{cmd_list[0]}'. Ensure adb/fastboot are correctly installed and in PATH.")
-        except subprocess.CalledProcessError as e:
-            error_message = f"Command failed with exit code {e.returncode}.\nCommand: {' '.join(cmd_list)}\nOutput: {e.output.strip()}"
-            self.output_callback('error', error_message)
-            raise
-        except Exception as e:
-            error_message = f"An unexpected error occurred while running command: {e}"
-            self.output_callback('error', error_message)
-            raise
-
-    def detect_device(self):
-        """
-        Detects if a device is in Fastboot mode.
-        Returns the device serial number if found, None otherwise.
-        """
-        try:
-            # Use a short timeout to prevent UI freeze during detection
-            result = subprocess.run([self.fastboot_path, "devices"], capture_output=True, text=True, check=True, timeout=5)
-            output = result.stdout.strip()
-            
-            # Fastboot output for connected device is typically "SERIAL\tfastboot"
-            if output and "fastboot" in output:
-                serial = output.split('\t')[0].strip()
-                # self.output_callback('info', f"Device detected in Fastboot mode: {serial}") # Log only on change
-                return serial
-            # self.output_callback('info', "No device found in Fastboot mode.") # Log only on change
-            return None
-        except subprocess.TimeoutExpired:
-            # self.output_callback('warning', "Fastboot command timed out during device detection.")
-            return None
-        except (subprocess.CalledProcessError, FileNotFoundError) as e:
-            # This can happen if permissions are wrong or fastboot isn't found/executable
-            # self.output_callback('error', f"Error detecting device (permissions/path issue?): {e}")
-            if isinstance(e, subprocess.CalledProcessError):
-                self.output_callback('error', f"Fastboot 'devices' command failed. Stderr: {e.stderr.strip()}")
-            elif isinstance(e, FileNotFoundError):
-                self.output_callback('error', "Fastboot executable not found or not callable during device detection.")
-            return None
-        except Exception as e:
-            self.output_callback('error', f"An unexpected error during device detection: {e}")
-            return None
-
-    def get_device_info(self, serial):
-        """
-        Attempts to get device information (codename, bootloader status, etc.) using fastboot.
-        :param serial: The device serial number.
-        Returns a dictionary with device info.
-        """
-        info = {"codename": "Unknown", "bootloader_locked": "Unknown", "product": "Unknown"}
-        if not serial:
-            return info
-
-        try:
-            # Get product/codename
-            # 'fastboot getvar product' gives the device codename
-            product_cmd = [self.fastboot_path, "-s", serial, "getvar", "product"]
-            result = subprocess.run(product_cmd, capture_output=True, text=True, check=False, timeout=5)
-            match = re.search(r"product:\s*(\w+)", result.stdout + result.stderr)
-            if match:
-                info["codename"] = match.group(1).strip()
-                info["product"] = info["codename"] # Often product and codename are the same
-
-            # Check bootloader status
-            # 'fastboot oem device-info' or 'fastboot getvar unlocked'
-            oem_cmd = [self.fastboot_path, "-s", serial, "oem", "device-info"]
-            result = subprocess.run(oem_cmd, capture_output=True, text=True, check=False, timeout=5)
-            output = result.stdout + result.stderr
-            if "Device unlocked: true" in output or "unlocked: yes" in output:
-                info["bootloader_locked"] = "Unlocked"
-            elif "Device unlocked: false" in output or "unlocked: no" in output:
-                info["bootloader_locked"] = "Locked"
-
-            # Fallback for getvar unlocked (some devices might respond to this directly)
-            if info["bootloader_locked"] == "Unknown":
-                unlocked_cmd = [self.fastboot_path, "-s", serial, "getvar", "unlocked"]
-                result_unlocked = subprocess.run(unlocked_cmd, capture_output=True, text=True, check=False, timeout=5)
-                output_unlocked = result_unlocked.stdout + result_unlocked.stderr
-                if "unlocked: yes" in output_unlocked:
-                    info["bootloader_locked"] = "Unlocked"
-                elif "unlocked: no" in output_unlocked:
-                    info["bootloader_locked"] = "Locked"
-
-
-        except subprocess.TimeoutExpired:
-            self.output_callback('warning', f"Fastboot command timed out while getting device info for {serial}.")
-        except Exception as e:
-            self.output_callback('warning', f"Could not get full device info for {serial}: {e}")
-        return info
-
-
-    def extract_rom(self, tar_path, extract_base_dir):
-        """
-        Extracts a Fastboot ROM (TGZ archive) to a specified directory.
-        :param tar_path: Path to the .tgz ROM file.
-        :param extract_base_dir: The base directory where the ROM will be extracted into a new subfolder.
-        Returns the path to the extracted ROM directory on success, False otherwise.
-        """
-        if not os.path.exists(tar_path):
-            self.output_callback('error', f"ROM file not found: {tar_path}")
+            self.log_callback(f"Error: Command '{command[0]}' not found. Is it in PATH or correctly specified?")
+            log_message('error', f"Command '{command[0]}' not found.")
             return False
+        except Exception as e:
+            self.log_callback(f"An unexpected error occurred: {e}")
+            log_message('error', f"Error executing command '{command_str}': {e}")
+            return False
+
+    def flash_device(self):
+        """
+        Orchestrates the device flashing process.
+        Finds the appropriate flash script (flash_all.sh or flash_all.bat)
+        and executes it.
+        """
+        self.log_callback("Starting device flashing process...")
+
+        # Construct path to the 'images' directory within the ROM folder
+        # Fastboot ROMs usually have a structure like:
+        # ROM_FOLDER/
+        #   images/
+        #     flash_all.sh (or .bat)
+        #     ... various .img files
         
-        self.output_callback('info', f"Preparing to extract ROM from {tar_path}...")
-        os.makedirs(extract_base_dir, exist_ok=True) # Ensure base extraction directory exists
-
-        try:
-            with tarfile.open(tar_path, 'r:gz') as tar:
-                # Determine the final extraction path.
-                # ROMs are usually inside a single top-level directory within the .tgz.
-                # Example: 'toco_global_images_V12.0.1.0.QJOMIXM_20200813.0000.00_10.0_global/'
-                
-                # Get the name of the top-level directory inside the tarball
-                # This works for most Xiaomi Fastboot ROMs which have a single root folder.
-                root_dir_name = ""
-                for member in tar.getmembers():
-                    if member.isdir() and "/" not in member.name.strip('/'): # Find top-level directory
-                        root_dir_name = member.name.strip('/')
-                        break
-                
-                if not root_dir_name:
-                    # Fallback if no obvious root dir, just use cleaned tar name
-                    root_dir_name = os.path.basename(tar_path).replace(".tgz", "").replace(".tar.gz", "")
-                    self.output_callback('warning', f"Could not determine root directory in tar, using '{root_dir_name}' as extraction folder name.")
-
-
-                final_extract_path = os.path.join(extract_base_dir, root_dir_name)
-                os.makedirs(final_extract_path, exist_ok=True) # Create the specific ROM folder
-
-                self.output_callback('info', f"Extracting to: {final_extract_path}")
-                tar.extractall(path=extract_base_dir) # Extract all members to the base dir, which will create the root_dir_name folder
-
-            self.output_callback('info', f"ROM extracted successfully to {final_extract_path}")
-            return final_extract_path
-        except tarfile.ReadError as e:
-            self.output_callback('error', f"Failed to read ROM file (corrupt or not a valid TGZ): {e}")
-            return False
-        except Exception as e:
-            self.output_callback('error', f"Error extracting ROM: {e}")
-            return False
-
-    def flash_rom(self, rom_path, flash_mode="clean_all"):
-        """
-        Flashes the extracted Fastboot ROM using its internal scripts.
-        :param rom_path: Path to the extracted ROM directory.
-        :param flash_mode: One of "clean_all", "except_storage", "except_data_storage".
-        Returns True on success, False otherwise.
-        """
-        if not os.path.exists(rom_path):
-            self.output_callback('error', f"Extracted ROM directory not found: {rom_path}")
-            return False
-
-        # Map desired mode to the corresponding script name
-        script_map = {
-            "clean_all": "flash_all.sh",
-            "except_storage": "flash_all_except_storage.sh",
-            "except_data_storage": "flash_all_except_data_storage.sh"
-        }
+        # Check for the 'images' subdirectory first, as scripts are often there
+        images_dir = os.path.join(self.rom_path, "images")
+        flash_script_path = None
+        script_name = ""
         
-        script_name = script_map.get(flash_mode, "flash_all.sh") # Default to clean_all
-
-        script_path = os.path.join(rom_path, script_name)
-
-        if not os.path.exists(script_path):
-            self.output_callback('error', f"Flashing script '{script_name}' not found in {rom_path}.")
-            self.output_callback('info', f"Available scripts in {rom_path}: {', '.join([f for f in os.listdir(rom_path) if f.endswith('.sh') or f.endswith('.bat')])}")
+        if self.current_os == "win32":
+            script_name = "flash_all.bat"
+        elif self.current_os == "linux" or self.current_os == "darwin":
+            script_name = "flash_all.sh"
+        else:
+            self.log_callback(f"Error: Unsupported operating system: {self.current_os}")
+            log_message('error', f"Unsupported OS for flashing: {self.current_os}")
             return False
 
-        self.output_callback('info', f"Starting flashing process using {script_name}...")
-        
-        try:
-            # Ensure the script is executable on Linux
-            os.chmod(script_path, 0o755) # rwxr-xr-x
-
-            # Determine how to execute the script: with sudo or directly
-            # The scripts usually call fastboot directly.
-            # If fastboot is in PATH or bundled, it should be found.
-            # sudo is often needed for fastboot commands if udev rules are not perfectly set up,
-            # or if the script itself performs operations that require root.
-            
-            # The 'flash_all.sh' scripts in Xiaomi ROMs usually don't need 'sudo bash -c'
-            # themselves if fastboot has permissions. However, if fastboot fails with
-            # permission issues, adding 'sudo' here could resolve it.
-            # For robustness, we'll try running with sudo as these scripts often need it.
-            
-            cmd = [script_path]
-            # Check if we are already running as root (e.g., if user launched MiFlashX with sudo)
-            if os.geteuid() != 0: # If not root
-                cmd = ["sudo"] + cmd
-                self.output_callback('warning', "Running flash script with 'sudo'. You may be prompted for your password in the terminal.")
+        # Prioritize script in 'images' directory
+        candidate_script_in_images = os.path.join(images_dir, script_name)
+        if os.path.exists(candidate_script_in_images):
+            flash_script_path = candidate_script_in_images
+            self.log_callback(f"Found flash script in images directory: {flash_script_path}")
+            log_message('info', f"Using script: {flash_script_path}")
+        else:
+            # Fallback: Check if the script is directly in the ROM root (less common for modern ROMs)
+            candidate_script_in_root = os.path.join(self.rom_path, script_name)
+            if os.path.exists(candidate_script_in_root):
+                flash_script_path = candidate_script_in_root
+                self.log_callback(f"Found flash script in ROM root: {flash_script_path}")
+                log_message('info', f"Using script: {flash_script_path}")
             else:
-                self.output_callback('info', "Running flash script as root (application is already elevated).")
+                self.log_callback(f"Error: Flashing script '{script_name}' not found in '{images_dir}' or '{self.rom_path}'.")
+                log_message('error', f"Flashing script '{script_name}' not found.")
+                return False
 
+        # Ensure the script is executable on Linux/macOS
+        if self.current_os in ["linux", "darwin"]:
+            try:
+                os.chmod(flash_script_path, 0o755) # rwx for owner, rx for group/others
+                self.log_callback(f"Set executable permissions for {flash_script_path}")
+                log_message('info', f"Set executable permissions for {flash_script_path}")
+            except Exception as e:
+                self.log_callback(f"Warning: Could not set executable permissions for {flash_script_path}: {e}")
+                log_message('warning', f"Failed to chmod {flash_script_path}: {e}")
 
-            # Execute the script from its directory (cwd=rom_path)
-            self._run_command(cmd, cwd=rom_path, sudo_required=True) # _run_command will handle the 'sudo' prefix itself
-            
-            self.output_callback('info', "Flashing completed successfully! Device should reboot automatically.")
-            return True
-        except subprocess.CalledProcessError as e:
-            self.output_callback('error', f"Flashing failed. Check logs for details. Error: {e}")
-            return False
-        except Exception as e:
-            self.output_callback('error', f"An unexpected error occurred during flashing: {e}")
-            return False
+        # Determine the working directory for the script execution
+        # It's usually the directory containing the script, so it can find image files
+        script_cwd = os.path.dirname(flash_script_path)
+
+        # Execute the flashing script
+        # For .sh scripts, we run them directly. For .bat, we use 'cmd /c' on Windows.
+        if self.current_os == "win32":
+            # On Windows, we need to run batch files via cmd.exe
+            command = ["cmd.exe", "/c", script_name]
+            # When using shell=True or cmd /c, the script_name needs to be just the name,
+            # and cwd handles the directory.
+            # However, since we're using Popen with a list of commands, it's safer
+            # to provide the full path to the script and let the shell handle it.
+            # Let's try running it directly with its full path and shell=True for bat files
+            # as they often rely on shell features.
+            return self._execute_command([flash_script_path], cwd=script_cwd, shell=True)
+        else: # Linux or macOS
+            # On Linux/macOS, we run shell scripts directly
+            return self._execute_command([flash_script_path], cwd=script_cwd, shell=False)
