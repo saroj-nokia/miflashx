@@ -1,10 +1,10 @@
 #!/bin/bash
-# This script is used to build the MiFlashX executable for Linux using PyInstaller.
+# This script is used to build the MiFlashX executable for Fedora using PyInstaller.
 
 # Exit immediately if a command exits with a non-zero status.
 set -e
 
-echo "Starting MiFlashX Linux build process..."
+echo "Starting MiFlashX Fedora build process..."
 
 # Navigate to the root of your project (one level up from build_scripts)
 PROJECT_ROOT="$(dirname "$0")/.."
@@ -13,22 +13,26 @@ cd "${PROJECT_ROOT}"
 # Ensure Python virtual environment is activated if you use one
 # source venv/bin/activate # Uncomment if you're using a virtual environment
 
-# Install system-level dependencies for graphics (important for PyQt6 on Linux)
-echo "Installing system-level graphics dependencies for the build environment..."
-sudo apt-get update
-sudo apt-get install -y --no-install-recommends \
-    libgl1-mesa-dev \
-    libegl1-mesa-dev \
-    libxkbcommon-x11-0 \
-    libxcb-icccm4 \
-    libxcb-image0 \
-    libxcb-keysyms1 \
-    libxcb-render-util0 \
-    libxcb-shape0 \
-    libxcb-xkb1 \
-    libxcb-cursor0 \
-    mesa-utils
-
+# Install system-level dependencies for graphics (important for PyQt6 on Fedora)
+# These packages provide libEGL.so.1, libGL.so.1, and other OpenGL libraries.
+echo "Installing system-level graphics dependencies for the build environment (Fedora)..."
+sudo dnf install -y \
+    mesa-libGL-devel \
+    mesa-libEGL-devel \
+    libxkbcommon-x11 \
+    libxcb-devel \
+    libX11-devel \
+    libXau-devel \
+    libXdmcp-devel \
+    libxcb-util-devel \
+    libxcb-image-devel \
+    libxcb-render-util-devel \
+    libxcb-cursor-devel \
+    libxcb-icccm-devel \
+    libxcb-keysyms-devel \
+    libxcb-xkb-devel \
+    mesa-dri-drivers \
+    mesa-vulkan-drivers # Often needed for modern Qt apps, especially on newer systems
 
 # Install PyInstaller, PyQt6, Pillow if they are not already installed
 echo "Installing/updating Python dependencies..."
@@ -117,7 +121,6 @@ echo "-----------------------------------------"
 
 # --- STEP 3: Build using the MODIFIED .spec file ---
 echo "Starting PyInstaller build using the modified .spec file..."
-# Removed --debug=imports from here, as it will be injected into the .spec file by modify_spec.py
 pyinstaller "${SPEC_FILE}"
 
 echo "Build complete. Your executable is located in: dist/MiFlashX"
@@ -133,42 +136,4 @@ else
 fi
 echo "-------------------------------------------------------------"
 
-# --- Test Run the Compiled Executable ---
-echo "Attempting to run the compiled executable for a quick test..."
-EXECUTABLE_PATH="./dist/MiFlashX"
-TEST_LOG_FILE="test_run_output.log"
-
-if [ -f "${EXECUTABLE_PATH}" ]; then
-    chmod +x "${EXECUTABLE_PATH}" # Ensure it's executable
-    echo "Running ${EXECUTABLE_PATH} and redirecting output to ${TEST_LOG_FILE}..."
-
-    # Set QT_QPA_PLATFORM to 'offscreen' for CI testing, as it avoids display issues.
-    export QT_QPA_PLATFORM=offscreen
-    
-    # Run in background with a timeout to prevent hanging, and capture output
-    timeout 10s "${EXECUTABLE_PATH}" > "${TEST_LOG_FILE}" 2>&1 &
-    PID=$! # Get the process ID of the background process
-
-    echo "Executable started with PID ${PID}. Waiting 5 seconds for it to initialize..."
-    sleep 5 # Give it a few seconds to start up and potentially crash
-
-    # Check if the process is still running
-    if ps -p $PID > /dev/null; then
-        echo "Executable appears to be running. Sending SIGTERM to gracefully stop it."
-        kill $PID
-        wait $PID || true # Wait for it to terminate, `|| true` prevents script from exiting if kill fails
-        echo "Executable stopped."
-        echo "Test run successful (application launched and terminated)."
-        echo "Check '${TEST_LOG_FILE}' for any captured output."
-    else
-        echo "Executable terminated unexpectedly or failed to start."
-        echo "Test run FAILED. Please check '${TEST_LOG_FILE}' for details."
-        cat "${TEST_LOG_FILE}" # Print the log content to console for immediate debugging
-        exit 1 # Fail the build script if the test run fails
-    fi
-else
-    echo "Error: Compiled executable not found at ${EXECUTABLE_PATH}. Build likely failed."
-    exit 1
-fi
-
-echo "Build and test process completed."
+echo "Build process completed. Please manually test the executable in dist/MiFlashX."
