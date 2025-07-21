@@ -1,3 +1,4 @@
+# utils.py
 import os
 import sys
 import logging
@@ -67,7 +68,7 @@ def find_adb_fastboot():
             adb_path = adb_candidate
         if os.path.exists(fastboot_candidate) and os.access(fastboot_candidate, os.X_OK):
             fastboot_path = fastboot_candidate
-        
+            
         if adb_path and fastboot_path:
             log_message('info', f"Found bundled platform-tools: {bundled_dir}")
             return adb_path, fastboot_path
@@ -124,8 +125,9 @@ def check_udev_rules():
             current_content = f.read()
         
         # Simple check for presence of key vendor IDs. More robust checks are possible.
+        # FIX: Escaped the second double quote correctly.
         if "ATTR{idVendor}==\"18d1\"" in current_content and \
-           "ATTR{idVendor}=="2717\"" in current_content:
+           "ATTR{idVendor}==\"2717\"" in current_content:
             return True, "Rules file found and appears correct."
         else:
             return False, "Rules file exists but may be incomplete or incorrect for Xiaomi/Android devices."
@@ -219,7 +221,7 @@ def add_to_adbusers_group():
             if "incorrect password attempt" in process.stderr.lower():
                 return False, "Failed to add user to group: Incorrect sudo password or no password entered. Run the app from a terminal and provide password."
             return False, error_msg
-        
+            
         log_message('info', f"User '{current_user}' successfully added to 'adbusers' group.")
         return True, f"User '{current_user}' successfully added to 'adbusers' group. You MUST log out and log back in for changes to take effect."
 
