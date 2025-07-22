@@ -12,7 +12,7 @@ LOG_FILE = os.path.join(LOG_DIR, "miflashx.log")
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG, # <--- CHANGED FROM INFO TO DEBUG for more verbose output
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler(LOG_FILE),
@@ -61,13 +61,13 @@ def find_adb_fastboot():
     if os.path.isdir(bundled_dir):
         adb_candidate = os.path.join(bundled_dir, "adb")
         fastboot_candidate = os.path.join(bundled_dir, "fastboot")
-        
+
         # Check if files exist and are executable
         if os.path.exists(adb_candidate) and os.access(adb_candidate, os.X_OK):
             adb_path = adb_candidate
         if os.path.exists(fastboot_candidate) and os.access(fastboot_candidate, os.X_OK):
             fastboot_path = fastboot_candidate
-            
+
         if adb_path and fastboot_path:
             log_message('info', f"Found bundled platform-tools: {bundled_dir}")
             return adb_path, fastboot_path
@@ -115,15 +115,14 @@ def check_udev_rules():
     Returns (True/False, message).
     """
     udev_rules_path = "/etc/udev/rules.d/51-android.rules"
-    
+
     if not os.path.exists(udev_rules_path):
         return False, f"Udev rules file '{udev_rules_path}' not found."
 
     try:
         with open(udev_rules_path, 'r') as f:
             current_content = f.read()
-        
-        # Simple check for presence of key vendor IDs. More robust checks are possible.
+
         # FIX: Escaped the second double quote correctly.
         if "ATTR{idVendor}==\"18d1\"" in current_content and \
            "ATTR{idVendor}==\"2717\"" in current_content:
@@ -148,20 +147,20 @@ def install_udev_rules():
 
     log_message('info', f"Attempting to write udev rules to {udev_rules_path}...")
     try:
-        # Use 'sudo tee' to write to a privileged location safely.
-        # `input=rules_content.encode()` sends content to stdin of tee.
+        # FIX: Explicitly encode rules_content to bytes and set text=False
         process = subprocess.run(
             ["sudo", "tee", udev_rules_path],
-            input=rules_content.encode(),
+            input=rules_content.encode('utf-8'), # Ensure it's explicitly UTF-8 encoded bytes
             capture_output=True,
-            check=False, # Don't raise CalledProcessError immediately for sudo prompts
-            text=True
+            check=False,
+            text=False # <--- IMPORTANT: Change this to False, as input is now explicitly bytes
         )
 
         if process.returncode != 0:
-            error_msg = f"Failed to write udev rules. Sudo response: {process.stderr.strip()}"
+            # FIX: Decode stderr to string for logging
+            error_msg = f"Failed to write udev rules. Sudo response: {process.stderr.decode('utf-8', errors='ignore').strip()}"
             log_message('error', error_msg)
-            if "incorrect password attempt" in process.stderr.lower():
+            if "incorrect password attempt" in process.stderr.decode('utf-8', errors='ignore').lower():
                 return False, "Failed to write udev rules: Incorrect sudo password or no password entered. Run the app from a terminal and provide password."
             return False, error_msg
 
@@ -172,12 +171,13 @@ def install_udev_rules():
         # Reload and trigger udev to apply new rules
         subprocess.run(["sudo", "udevadm", "control", "--reload-rules"], check=True, capture_output=True)
         subprocess.run(["sudo", "udevadm", "trigger"], check=True, capture_output=True)
-        
+
         log_message('info', "Udev rules reloaded. You may need to replug your device.")
         return True, "Udev rules installed and reloaded successfully. Please replug your device."
 
     except subprocess.CalledProcessError as e:
-        error_msg = f"Sudo command failed during udev rule installation: {e}\nStderr: {e.stderr.strip()}"
+        # FIX: Decode stderr to string for logging
+        error_msg = f"Sudo command failed during udev rule installation: {e}\nStderr: {e.stderr.decode('utf-8', errors='ignore').strip()}"
         log_message('error', error_msg)
         return False, error_msg
     except FileNotFoundError:
@@ -211,7 +211,7 @@ def add_to_adbusers_group():
             ["sudo", "usermod", "-aG", "adbusers", current_user],
             capture_output=True,
             check=False,
-            text=True
+            text=True # This can remain True as usermod output is typically text
         )
 
         if process.returncode != 0:
@@ -220,7 +220,7 @@ def add_to_adbusers_group():
             if "incorrect password attempt" in process.stderr.lower():
                 return False, "Failed to add user to group: Incorrect sudo password or no password entered. Run the app from a terminal and provide password."
             return False, error_msg
-            
+
         log_message('info', f"User '{current_user}' successfully added to 'adbusers' group.")
         return True, f"User '{current_user}' successfully added to 'adbusers' group. You MUST log out and log back in for changes to take effect."
 

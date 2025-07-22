@@ -1,3 +1,4 @@
+
 #!/bin/bash
 # This script is used to build the MiFlashX executable for Fedora using PyInstaller.
 

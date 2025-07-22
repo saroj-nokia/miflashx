@@ -9,8 +9,8 @@ MiFlashX is a graphical utility designed to simplify the process of flashing off
 * **Fastboot ROM Flashing:** Easily flash official Xiaomi Fastboot ROMs (`.tgz` archives).
 * **Multiple Flashing Modes:**
     * **Clean All:** Wipes all data (clean install).
+    * **Save User Data:** Flashes ROM while attempting to preserve user data.
     * **Save User Data & Storage:** Safest option for updates, attempts to preserve user data and internal storage.
-    * **Flash All and Lock Bootloader:** Flashes ROM and re-locks the bootloader (use with caution, typically only for official stable ROMs).
 * **Device Detection:** Automatically detects connected devices in Fastboot mode.
 * **Bootloader Status Check:** Informs you if your device's bootloader is locked or unlocked.
 * **Linux System Setup Helper:** Provides buttons to help install `udev` rules and add your user to the `adbusers` group for proper device permissions.
