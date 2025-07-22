@@ -10,6 +10,9 @@ echo "Starting MiFlashX Fedora build process..."
 PROJECT_ROOT="$(dirname "$0")/.."
 cd "${PROJECT_ROOT}"
 
+# Define the application name (already defined in your script, ensuring consistency)
+APP_NAME="MiFlashX"
+
 # Ensure Python virtual environment is activated if you use one
 # source venv/bin/activate # Uncomment if you're using a virtual environment
 
@@ -27,7 +30,7 @@ sudo dnf install -y \
     mesa-dri-drivers \
     mesa-vulkan-drivers \
     qt6-qtbase-devel \
-    qt6-qtwayland-devel # If you use Wayland, otherwise not strictly necessary for XCB
+    qt6-qtwayland-devel
 
 # Install PyInstaller, PyQt6, Pillow if they are not already installed
 echo "Installing/updating Python dependencies..."
@@ -89,19 +92,19 @@ echo "Android Platform Tools prepared."
 # This command only generates the spec file, it does NOT build the executable.
 echo "Generating initial PyInstaller .spec file..."
 pyi-makespec \
-             --onefile \
-             --windowed \
-             --name MiFlashX \
-             --icon assets/icon.png \
-             --add-data "assets:assets" \
-             --add-data "platform-tools:platform-tools" \
-             --hidden-import=utils \
-             --hidden-import=core \
-             --hidden-import=gui \
-             --collect-submodules PyQt6.QtXcbQpa \
-             --collect-data PyQt6.Qt \
-             --specpath . \
-             main.py
+              --onefile \
+              --windowed \
+              --name MiFlashX \
+              --icon assets/icon.png \
+              --add-data "assets:assets" \
+              --add-data "platform-tools:platform-tools" \
+              --hidden-import=utils \
+              --hidden-import=core \
+              --hidden-import=gui \
+              --collect-submodules PyQt6.QtXcbQpa \
+              --collect-data PyQt6.Qt \
+              --specpath . \
+              main.py
 
 # --- STEP 2: Modify the .spec file using the standalone Python script ---
 echo "Modifying MiFlashX.spec to explicitly add project root to pathex and enable debug imports..."
@@ -131,4 +134,20 @@ else
 fi
 echo "-------------------------------------------------------------"
 
-echo "Build process completed. Please manually test the executable in dist/MiFlashX."
+# --- New: Create a .zip archive of the compiled executable ---
+ZIP_FILE_NAME="${APP_NAME}_Linux.zip"
+EXECUTABLE_PATH="${PROJECT_ROOT}/dist/${APP_NAME}"
+
+if [ -f "${EXECUTABLE_PATH}" ]; then
+  echo "Creating .zip archive: ${ZIP_FILE_NAME}"
+  # Go into the dist directory to zip the executable directly without including the 'dist/' parent folder in the zip
+  # The 'cd' command here changes the directory for the 'zip' command only within this subshell.
+  (cd "${PROJECT_ROOT}/dist" && zip "${ZIP_FILE_NAME}" "${APP_NAME}")
+  # Move the zip file back to the project root for easier access
+  mv "${PROJECT_ROOT}/dist/${ZIP_FILE_NAME}" "${PROJECT_ROOT}/"
+  echo "Zip archive created at: ${PROJECT_ROOT}/${ZIP_FILE_NAME}"
+else
+  echo "Error: Executable not found at ${EXECUTABLE_PATH}. Skipping zip creation."
+fi
+
+echo "All build and archiving tasks completed."
