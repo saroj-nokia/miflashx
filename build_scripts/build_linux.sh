@@ -18,19 +18,19 @@ APP_NAME="MiFlashX"
 
 # Install system-level dependencies for graphics (important for PyQt6 on Fedora)
 # These packages provide libEGL.so.1, libGL.so.1, and other OpenGL libraries.
-echo "Installing system-level graphics dependencies for the build environment (Fedora)..."
-sudo dnf install -y \
-    mesa-libGL-devel \
-    mesa-libEGL-devel \
-    libxkbcommon-x11 \
-    libxcb-devel \
-    libX11-devel \
-    libXau-devel \
-    libXdmcp-devel \
-    mesa-dri-drivers \
-    mesa-vulkan-drivers \
-    qt6-qtbase-devel \
-    qt6-qtwayland-devel
+# echo "Installing system-level graphics dependencies for the build environment (Fedora)..."
+# sudo dnf install -y \
+#    mesa-libGL-devel \
+#    mesa-libEGL-devel \
+#    libxkbcommon-x11 \
+#    libxcb-devel \
+#    libX11-devel \
+#    libXau-devel \
+#    libXdmcp-devel \
+#    mesa-dri-drivers \
+#    mesa-vulkan-drivers \
+#    qt6-qtbase-devel \
+#    qt6-qtwayland-devel
 
 # Install PyInstaller, PyQt6, Pillow if they are not already installed
 echo "Installing/updating Python dependencies..."
