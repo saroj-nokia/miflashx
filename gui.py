@@ -1,6 +1,7 @@
 import sys
 import os
 import re
+import inspect
 import subprocess
 
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
@@ -17,8 +18,15 @@ from device_monitor import DeviceMonitor, DeviceState
 
 
 # Worker Thread for long-running operations (ROM extraction, flashing, udev tasks).
-# Unchanged from before — this pattern was already correct, it just wasn't
-# being used for device detection, which is what caused the GUI-thread freezes.
+#
+# Bug fixed here: the previous version unconditionally injected an
+# output_callback kwarg into every function it called. That's only valid for
+# functions written to accept it — extract_rom(), flash_rom(),
+# install_udev_rules(), and add_to_adbusers_group() vary on this, and calling
+# any of the ones that don't accept it raised "got an unexpected keyword
+# argument 'output_callback'" and killed the worker before it did anything.
+# Now Worker inspects the target function first and only passes the callback
+# to functions that actually declare it.
 class Worker(QThread):
     finished = pyqtSignal(bool, str)
     progress = pyqtSignal(str)
@@ -34,7 +42,14 @@ class Worker(QThread):
             def worker_output_callback(level, msg):
                 self.progress.emit(f"[{level.upper()}] {msg}")
 
-            self.kwargs['output_callback'] = worker_output_callback
+            sig = inspect.signature(self.func)
+            accepts_callback = (
+                'output_callback' in sig.parameters
+                or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+            )
+            if accepts_callback:
+                self.kwargs['output_callback'] = worker_output_callback
+
             result, message = self.func(*self.args, **self.kwargs)
             self.finished.emit(result, message)
         except Exception as e:
