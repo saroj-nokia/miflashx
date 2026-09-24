@@ -34,7 +34,7 @@ APP_NAME="MiFlashX"
 
 # Install PyInstaller, PyQt6, Pillow if they are not already installed
 echo "Installing/updating Python dependencies..."
-pip install pyinstaller PyQt6 Pillow
+pip install pyinstaller PyQt6 Pillow pyudev
 
 # Remove previous build artifacts to ensure a clean slate
 echo "Cleaning up previous build artifacts..."
@@ -101,6 +101,9 @@ pyi-makespec \
               --hidden-import=utils \
               --hidden-import=core \
               --hidden-import=gui \
+              --hidden-import=command_runner \
+              --hidden-import=device_monitor \
+              --hidden-import=pyudev \
               --collect-submodules PyQt6.QtXcbQpa \
               --collect-data PyQt6.Qt \
               --specpath . \

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=MiFlashX
+GenericName=Xiaomi Fastboot Flashing Tool
+Comment=Flash official Xiaomi Fastboot ROMs on Linux
+Exec=miflashx
+Icon=miflashx
+Terminal=false
+Categories=Utility;System;
+StartupNotify=true
+StartupWMClass=MiFlashX
