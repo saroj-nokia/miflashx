@@ -3,38 +3,70 @@ name: Build MiFlashX for Linux
 on:
   push:
     branches:
-      - main # Trigger on pushes to the main branch
-  workflow_dispatch: # Allows you to manually trigger the workflow from the GitHub UI
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
 
 jobs:
   build-linux:
-    runs-on: ubuntu-latest # Specify the runner environment (latest Ubuntu LTS)
+    runs-on: ubuntu-latest
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4 # Action to check out your repository code
+      uses: actions/checkout@v4
 
     - name: Set up Python
-      uses: actions/setup-python@v5 # Action to set up Python environment
+      uses: actions/setup-python@v5
       with:
-        python-version: '3.10' # Specify the Python version you want to use (e.g., '3.9', '3.10', '3.11')
+        python-version: '3.10'
+        cache: 'pip'
 
-    - name: Install Python dependencies and build
-      # Combine all build steps into one 'run' block to ensure clean state and proper execution flow
-      # This step will run the build_linux.sh script
+    # PyQt6 needs these at import time (PyInstaller imports the app to
+    # analyze it, so this has to happen before the build, not just before
+    # running the built binary). build_linux.sh's own apt/dnf step is
+    # commented out and targets Fedora's dnf anyway, which doesn't apply to
+    # this ubuntu-latest runner — install the actual Ubuntu equivalents here.
+    - name: Install system Qt/XCB runtime dependencies
       run: |
-        # Make the build script executable
-        chmod +x build_scripts/build_linux.sh
-        # Execute the build script
-        ./build_scripts/build_linux.sh
-      # The 'continue-on-error: true' is CRUCIAL here.
-      # It allows the workflow to proceed to the artifact upload step even if the build_linux.sh script fails (e.g., due to the test run failing).
-      continue-on-error: true
+        sudo apt-get update
+        sudo apt-get install -y \
+          libegl1 \
+          libgl1 \
+          libxkbcommon-x11-0 \
+          libxcb-cursor0 \
+          libxcb-icccm4 \
+          libxcb-image0 \
+          libxcb-keysyms1 \
+          libxcb-randr0 \
+          libxcb-render-util0 \
+          libxcb-shape0 \
+          libxcb-xfixes0 \
+          libxcb-xinerama0 \
+          libdbus-1-3
 
-    - name: Upload MiFlashX executable as artifact (even if build/test failed)
-      uses: actions/upload-artifact@v4 # Action to upload build artifacts
-      if: always() # This condition ensures the step runs regardless of previous step's success or failure
+    - name: Build MiFlashX
+      run: |
+        chmod +x build_scripts/build_linux.sh
+        ./build_scripts/build_linux.sh
+      # No continue-on-error here: a failed build must fail the job.
+      # Silently swallowing build failures (the previous behavior) meant CI
+      # could report success while shipping an empty or stale artifact.
+
+    - name: Verify the executable was actually produced
+      run: |
+        if [ ! -f dist/MiFlashX ]; then
+          echo "::error::dist/MiFlashX was not produced — build_linux.sh failed silently upstream."
+          exit 1
+        fi
+
+    - name: Upload MiFlashX executable as artifact
+      uses: actions/upload-artifact@v4
+      # Only runs if every previous step actually succeeded — this is the
+      # default behavior; no `if: always()` override needed or wanted here.
       with:
-        name: MiFlashX-Linux-Executable # Name of the artifact
-        path: dist/MiFlashX             # Path to the compiled executable
-        retention-days: 7               # How long to keep the artifact (e.g., 7 days)
+        name: MiFlashX-Linux-Executable
+        path: dist/MiFlashX
+        retention-days: 7
+        if-no-files-found: error
