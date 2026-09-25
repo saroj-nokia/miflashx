@@ -15,6 +15,62 @@ class FlashModes:
     SAVE_DATA_AND_STORAGE = "except_data_storage"
 
 
+# The three script basenames flash_rom() ever looks for (see below) — kept
+# here as the single source of truth so validation and actual flashing can't
+# drift out of sync with each other.
+_KNOWN_FLASH_SCRIPT_NAMES = ["flash_all.sh", "flash_all_except_data_storage.sh", "flash_all_lock.sh"]
+
+
+def validate_rom_directory(path: str):
+    """
+    Checks whether `path` looks like a usable extracted Fastboot ROM
+    directory — i.e. it (or its 'images' subfolder, or one level of nested
+    subfolder) contains at least one of the flash_all*.sh scripts flash_rom()
+    knows how to run. Pure filesystem checks, cheap enough to call directly
+    from the GUI thread (no subprocess, no large I/O) — this exists so
+    someone who already extracted a ROM once doesn't have to re-extract a
+    multi-gigabyte archive (rough on an HDD, and slow) just to flash again.
+
+    Returns (True, resolved_path) if valid — resolved_path is the actual ROM
+    root to hand to flash_rom(), which may be one level deeper than `path` if
+    the user picked the outer folder. Returns (False, error_message) if not.
+    """
+    def _has_scripts(p: str) -> bool:
+        if not os.path.isdir(p):
+            return False
+        for candidate_dir in (p, os.path.join(p, "images")):
+            if os.path.isdir(candidate_dir):
+                if any(os.path.exists(os.path.join(candidate_dir, name)) for name in _KNOWN_FLASH_SCRIPT_NAMES):
+                    return True
+        return False
+
+    if not os.path.isdir(path):
+        return False, f"'{path}' is not a directory."
+
+    if _has_scripts(path):
+        return True, path
+
+    # The user may have picked the outer folder (e.g. one still containing a
+    # single ROM-codename subfolder) rather than the ROM root itself — check
+    # one level down before giving up, same fallback extract_rom() already
+    # does for nested archives.
+    try:
+        for entry in sorted(os.listdir(path)):
+            candidate = os.path.join(path, entry)
+            if _has_scripts(candidate):
+                return True, candidate
+    except OSError as e:
+        return False, f"Could not read directory '{path}': {e}"
+
+    script_list = ", ".join(_KNOWN_FLASH_SCRIPT_NAMES)
+    return False, (
+        f"No flashing scripts ({script_list}) found in '{path}', its 'images' "
+        f"subfolder, or one level of nested subfolders. Make sure this is the "
+        f"extracted Fastboot ROM directory, not the original archive or an "
+        f"unrelated folder."
+    )
+
+
 class FlashingCore:
     def __init__(self, adb_path, fastboot_path, output_callback=None):
         self.adb_path = adb_path
@@ -240,6 +296,19 @@ class FlashingCore:
         Returns (True, message) on success, (False, error_message) on failure.
         """
         self._emit_status(f"Starting device flashing process with mode: {flash_mode}...")
+
+        # Resolve the real ROM root first, via the same validate_rom_directory()
+        # used for the "already-extracted folder" import path in the GUI. This
+        # makes flash_rom() work identically whether extracted_rom_path came
+        # from extract_rom() (already resolved to the nested folder, when there
+        # was one) or from a manually-selected folder that might be one level
+        # above the actual ROM root.
+        root_ok, root_result = validate_rom_directory(extracted_rom_path)
+        if not root_ok:
+            self._emit_status(root_result)
+            log_message('error', root_result)
+            return False, root_result
+        extracted_rom_path = root_result
 
         script_base_name = ""
         if flash_mode == FlashModes.CLEAN_ALL:

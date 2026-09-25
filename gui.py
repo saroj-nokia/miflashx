@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
 from PyQt6.QtCore import QThread, pyqtSignal, QPropertyAnimation, QEasingCurve, QByteArray, QSettings
 from PyQt6.QtGui import QIcon, QFont, QColor, QPalette, QAction, QActionGroup
 
-from core import FlashingCore, FlashModes
+from core import FlashingCore, FlashModes, validate_rom_directory
 from utils import log_message, get_os, check_udev_rules, install_udev_rules, add_to_adbusers_group, find_adb_fastboot
 from device_monitor import DeviceMonitor, DeviceState
 
@@ -153,6 +153,7 @@ class MiFlashX(QMainWindow):
         self.extracted_rom_path = None
         self.device_monitor = None
         self._info_worker = None
+        self._archive_selected = False
 
         self.settings = QSettings("miflashx", "MiFlashX")
         saved_theme = self.settings.value("theme", "system")
@@ -294,6 +295,14 @@ class MiFlashX(QMainWindow):
         self.extract_rom_button.clicked.connect(self.extract_rom)
         self.extract_rom_button.setEnabled(False)
         rom_selection_layout.addWidget(self.extract_rom_button)
+
+        or_label = QLabel("— or, if you've already extracted this ROM before —")
+        or_label.setStyleSheet("color: palette(mid);")
+        rom_selection_layout.addWidget(or_label)
+
+        self.use_extracted_folder_button = QPushButton("Use Already-Extracted ROM Folder…")
+        self.use_extracted_folder_button.clicked.connect(self.browse_extracted_folder)
+        rom_selection_layout.addWidget(self.use_extracted_folder_button)
 
         self.extracted_path_label = QLabel("Extracted ROM: None")
         rom_selection_layout.addWidget(self.extracted_path_label)
@@ -555,6 +564,7 @@ class MiFlashX(QMainWindow):
             self.append_log('[ERROR] ADB/Fastboot not found. Cannot proceed without them. Ensure they are in your system PATH or correctly bundled.')
             self.flash_button.setEnabled(False)
             self.extract_rom_button.setEnabled(False)
+            self.use_extracted_folder_button.setEnabled(False)
             self.device_status_label.setText("Device: <font color='red'>N/A (Tools Missing)</font>")
             self.device_info_label.setText("Info: N/A")
             self.udev_status_label.setText("Udev Rules (Linux): N/A (Tools Missing)")
@@ -640,9 +650,48 @@ class MiFlashX(QMainWindow):
             selected_file = file_dialog.selectedFiles()[0]
             self.rom_path_input.setText(selected_file)
             self.extracted_rom_path = None
+            self._archive_selected = True
             self.extracted_path_label.setText("Extracted ROM: None (Click 'Extract ROM')")
             self.extract_rom_button.setEnabled(True)
             self.flash_button.setEnabled(False)
+
+    def browse_extracted_folder(self):
+        """
+        Lets the user point directly at a ROM they already extracted, instead
+        of re-extracting the archive every time — extracting a multi-gigabyte
+        fastboot ROM tarball repeatedly is slow and hard on an HDD, and
+        there's no reason to redo it if the extracted files are still there.
+        Validation is a handful of os.path.exists() checks (see
+        core.validate_rom_directory), so it's fine to run directly here on
+        the GUI thread rather than through a Worker.
+        """
+        selected_dir = QFileDialog.getExistingDirectory(
+            self, "Select Already-Extracted ROM Folder", os.path.expanduser("~")
+        )
+        if not selected_dir:
+            return
+
+        ok, result = validate_rom_directory(selected_dir)
+        if not ok:
+            QMessageBox.critical(self, "Not a Valid ROM Folder", result)
+            self.append_log(f"[WARNING] Rejected folder as ROM source: {result}")
+            return
+
+        resolved_path = result
+        self.extracted_rom_path = resolved_path
+        self._archive_selected = False
+        # This path bypasses rom_path_input/extract_rom entirely, so make
+        # that visually clear rather than leaving a stale/empty archive field.
+        self.rom_path_input.setText("(using pre-extracted folder — no archive selected)")
+        self.extract_rom_button.setEnabled(False)
+        self.extracted_path_label.setText(
+            f"Extracted ROM: <font color='green'>{os.path.basename(resolved_path)} (existing folder)</font>"
+        )
+        self.append_log(f"[INFO] Using already-extracted ROM folder: {resolved_path}")
+
+        self.flash_button.setEnabled(self.current_serial is not None and self.current_bootloader_status == "Unlocked")
+        if not self.flash_button.isEnabled():
+            self.append_log('[WARNING] Flashing button remains disabled. Ensure a device is connected in Fastboot mode and its bootloader is unlocked.')
 
     def extract_rom(self):
         rom_file = self.rom_path_input.text()
@@ -751,7 +800,8 @@ class MiFlashX(QMainWindow):
 
     def set_ui_enabled(self, enabled):
         self.browse_rom_button.setEnabled(enabled)
-        self.extract_rom_button.setEnabled(enabled and self.rom_path_input.text() != "")
+        self.extract_rom_button.setEnabled(enabled and self._archive_selected)
+        self.use_extracted_folder_button.setEnabled(enabled)
         self.flash_mode_combo.setEnabled(enabled)
 
         self.flash_button.setEnabled(enabled and self.extracted_rom_path is not None and
