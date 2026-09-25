@@ -1,236 +1,230 @@
 # MiFlashX: Xiaomi Fastboot Flashing Tool for Linux
 
-MiFlashX is a graphical utility designed to simplify the process of flashing official Fastboot ROMs onto Xiaomi devices running on a Linux operating system. It provides an intuitive interface to select ROMs, choose flashing modes, and execute the necessary Fastboot commands.
+MiFlashX is a graphical utility for flashing official Xiaomi Fastboot ROMs
+from Linux. It wraps `adb`/`fastboot` in a PyQt6 GUI: pick a ROM, pick a
+flashing mode, watch the log, done.
 
-**Important Note:** This version of MiFlashX is developed specifically for **Linux** environments.
+**Linux only**, by design — it manages `udev` rules and the `adbusers`
+group, neither of which mean anything on Windows or macOS.
 
 ## Features ✨
 
-* **Fastboot ROM Flashing:** Easily flash official Xiaomi Fastboot ROMs (`.tgz` archives).
-* **Multiple Flashing Modes:**
-    * **Clean All:** Wipes all data (clean install).
-    * **Save User Data:** Flashes ROM while attempting to preserve user data.
-    * **Save User Data & Storage:** Safest option for updates, attempts to preserve user data and internal storage.
-* **Device Detection:** Automatically detects connected devices in Fastboot mode.
-* **Bootloader Status Check:** Informs you if your device's bootloader is locked or unlocked.
-* **Linux System Setup Helper:** Provides buttons to help install `udev` rules and add your user to the `adbusers` group for proper device permissions.
-* **Real-time Logging:** Displays command output and application logs directly in the GUI.
-* **Single Executable:** Compiles into a single executable file for easy distribution.
+* **Fastboot ROM flashing** from official `.tgz`/`.tar.gz` archives.
+* **Import an already-extracted ROM folder** instead of re-extracting the
+  archive every time — useful if you're working off an HDD, where repeated
+  extraction of a multi-gigabyte archive is slow and unnecessary once
+  you've already done it once.
+* **Multiple flashing modes**: clean install (wipes everything), keep user
+  data, keep data *and* storage (safest for routine updates), or flash-and-lock.
+* **Event-driven device detection** — reacts to USB plug/unplug via `udev`
+  instead of polling, so it doesn't stall waiting on `fastboot`.
+* **Bootloader status check** before it'll let you flash anything.
+* **Udev rules / `adbusers` group setup** from inside the app, via a proper
+  graphical authentication prompt (`pkexec`) — works whether you launched
+  MiFlashX from a terminal or an app menu icon.
+* **Light / Dark / Follow System theme switcher**, because on distros
+  without Qt-GTK theme integration installed (stock Fedora Workstation
+  among them), Qt has no way to detect your desktop's dark mode or accent
+  color on its own — see [Theming](#theming-) below.
+* **Real-time log output**, and a proper desktop integration (menu entry +
+  icon) via the included installer script.
 
 ## Requirements 📋
 
-Before you can compile and run MiFlashX, ensure you have the following:
+* **OS:** A modern Linux distribution. Fedora and Ubuntu are both tested;
+  anything with a recent Python 3 and Qt6 runtime libraries should work.
+* **Python:** 3.10 or newer.
+* **System Qt/XCB libraries** — PyQt6 needs these to even import, not just
+  to run the built binary. Most desktop-flavored installs already have
+  them; a minimal/server install or a CI runner usually won't.
 
-* **Operating System:** Any modern Linux distribution (e.g., Ubuntu, Fedora, Arch Linux).
-* **Python:** Python 3.8 or newer.
-* **pip:** Python package installer (usually comes with Python 3).
-* **ADB and Fastboot:** The Android SDK Platform Tools. MiFlashX will attempt to use bundled versions, but having them installed system-wide is also an option.
-* **Pillow:** Python Imaging Library (for icon generation).
-* **PyQt6:** Python bindings for the Qt GUI framework.
-* **PyInstaller:** For bundling the application into a single executable.
-* **`tar` utility:** Standard on most Linux distributions, used for extracting `.tgz` ROMs.
-* **`sudo` privileges:** Required for installing `udev` rules and adding your user to the `adbusers` group.
+  Fedora:
+  ```bash
+  sudo dnf install -y mesa-libGL mesa-libEGL libxkbcommon-x11 \
+      libxcb libX11 xcb-util-cursor xcb-util-image xcb-util-keysyms \
+      xcb-util-renderutil xcb-util-wm dbus-libs
+  ```
+  Ubuntu/Debian:
+  ```bash
+  sudo apt-get install -y libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0 \
+      libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
+      libxcb-render-util0 libxcb-shape0 libxcb-xfixes0 libxcb-xinerama0 \
+      libdbus-1-3
+  ```
+* **`pkexec`** (polkit) — for the in-app udev/adbusers setup buttons.
+  Preinstalled on GNOME and KDE; install `polkit` manually on minimal
+  window-manager setups if it's missing.
+* **ADB and Fastboot** — MiFlashX looks for a bundled `platform-tools/`
+  folder first, then falls back to your system `PATH`.
 
 ## Project Structure 📁
 
 ```
-
 miflashx/
-├── main.py                 \# Main application entry point
-├── gui.py                  \# PyQt6 GUI definition
-├── core.py                 \# Core flashing logic (adb/fastboot command execution)
-├── utils.py                \# Utility functions (logging, OS detection, udev management)
-├── generate\_icon.py        \# Script to create the application icon
-├── assets/                 \# Contains the application icon (generated by generate\_icon.py)
-│   └── icon.png            \# The main application icon (this is what the app uses)
-│   └── icon\_M.png          \# Example icon (generated)
-│   └── icon\_X.png          \# Example icon (generated)
-│   └── icon\_MiFlashX.png   \# Example icon (generated)
-├── platform-tools/         \# ADB and Fastboot binaries (downloaded separately)
-│   ├── adb
-│   └── fastboot
-│   └── ...                 \# Other files from Google's platform-tools
-├── roms/                   \# Default directory for extracted ROMs (created by the app)
-├── logs/                   \# Directory for application logs (created by the app)
-├── build\_scripts/
-│   └── build\_linux.sh      \# Script to compile the application using PyInstaller
-└── udev\_rules/
-└── 51-android.rules    \# Reference for udev rules (content generated by utils.py)
-
-````
-
-## Compilation Instructions ⚙️
-
-Follow these steps to compile MiFlashX into a single executable for Linux:
-
-### Step 1: Create the Project Directory Structure
-
-Open your terminal and create the main project directory and its subdirectories:
-
-```bash
-mkdir miflashx
-cd miflashx
-mkdir assets logs platform-tools roms build_scripts udev_rules
-````
-
-### Step 2: Place the Code Files
-
-Create each Python file and the shell script, then copy-paste the provided code into them. Ensure you are in the `miflashx` directory when creating these files.
-
-  * `main.py`
-  * `gui.py`
-  * `core.py`
-  * `utils.py`
-  * `generate_icon.py` (place this in the root `miflashx/` directory)
-  * `build_scripts/build_linux.sh`
-  * `udev_rules/51-android.rules` (This file is for reference; `utils.py` generates its content.)
-
-### Step 3: Prepare ADB and Fastboot Binaries
-
-1.  **Download Platform Tools:**
-      * Go to the official Google Android developer site: [https://developer.android.com/tools/releases/platform-tools](https://developer.android.com/tools/releases/platform-tools)
-      * Download the **`platform-tools-latest-linux.zip`** file.
-2.  **Extract and Copy:**
-      * Unzip the downloaded file. You will find a folder named `platform-tools` inside.
-      * Copy the *contents* of this extracted `platform-tools` folder (i.e., `adb`, `fastboot`, and any other files) directly into your project's `miflashx/platform-tools/` directory.
-3.  **Set Permissions:**
-      * Navigate to `miflashx/platform-tools/` in your terminal:
-        ```bash
-        cd miflashx/platform-tools/
-        chmod +x adb fastboot
-        cd .. # Go back to miflashx root
-        ```
-
-### Step 4: Generate the Application Icon
-
-The `generate_icon.py` script will create the `icon.png` file needed by the application.
-
-1.  **Install Pillow:** If you haven't already, install the Pillow library:
-    ```bash
-    pip install Pillow
-    ```
-2.  **Run the Icon Generation Script:**
-      * Ensure you are in the root `miflashx` directory.
-      * Run the script:
-        ```bash
-        python generate_icon.py
-        ```
-      * This will create `icon.png` (and other example icons) inside your `miflashx/assets/` directory. The script automatically creates the `assets` folder if it doesn't exist.
-
-### Step 5: Install Python Dependencies for Compilation
-
-Ensure you have `PyQt6` and `PyInstaller` installed in your Python environment:
-
-```bash
-pip install PyQt6 pyinstaller
+├── main.py                  # Thin launcher: QApplication setup only
+├── gui.py                   # The actual application (MiFlashX QMainWindow)
+├── core.py                  # Flashing/extraction logic, ROM folder validation
+├── utils.py                 # Logging, OS detection, udev/adbusers via pkexec
+├── device_monitor.py        # udev-based event-driven USB device detection
+├── command_runner.py        # Deadlock-safe subprocess wrapper with timeouts
+├── generate_icon.py         # Generates assets/icon.png
+├── requirements.txt         # Runtime deps: PyQt6, Pillow, pyudev
+├── assets/
+│   └── icon.png
+├── platform-tools/          # adb/fastboot binaries (not included — see below)
+├── build_scripts/
+│   └── build_linux.sh       # PyInstaller build script
+├── packaging/
+│   ├── install.sh           # User-level installer: binary + icons + .desktop
+│   └── miflashx.desktop     # App-launcher entry
+├── udev_rules/
+│   └── 51-android.rules     # Reference copy; utils.py generates this content
+└── .github/workflows/
+    └── build_linux.yml      # CI build (requires system libs — see workflow)
 ```
 
-### Step 6: Run the Build Script
+At runtime, logs go to `~/.local/share/miflashx/logs/miflashx.log` and
+extracted ROMs default to `~/.local/share/miflashx/roms/` — both XDG
+locations, not folders inside the project directory.
 
-This step uses PyInstaller to bundle your application.
+## Building 🛠️
 
-1.  **Make the build script executable:**
-    ```bash
-    chmod +x build_scripts/build_linux.sh
-    ```
-2.  **Execute the build script:**
-      * Ensure you are in the root `miflashx` directory.
-      * Run the script:
-        ```bash
-        ./build_scripts/build_linux.sh
-        ```
-      * This process may take a few minutes as PyInstaller collects all dependencies.
+```bash
+git clone https://github.com/saroj-nokia/miflashx.git
+cd miflashx
+```
 
-## Running MiFlashX 🚀
+**1. Get ADB/Fastboot.** Download `platform-tools-latest-linux.zip` from
+[Google's site](https://developer.android.com/tools/releases/platform-tools),
+extract it, and copy its contents into `platform-tools/` at the project
+root:
+```bash
+mkdir -p platform-tools
+# unzip the download, then:
+cp /path/to/extracted/platform-tools/* platform-tools/
+chmod +x platform-tools/adb platform-tools/fastboot
+```
 
-After a successful compilation, your executable will be located in the `dist/` directory.
+**2. Install Python dependencies:**
+```bash
+pip install -r requirements.txt
+```
 
-1.  **Navigate to the `dist` directory:**
-    ```bash
-    cd dist
-    ```
-2.  **Run the application:**
-    ```bash
-    ./MiFlashX
-    ```
+**3. Generate the icon:**
+```bash
+python3 generate_icon.py
+```
 
-## Usage Instructions 📝
+**4. Build:**
+```bash
+chmod +x build_scripts/build_linux.sh
+./build_scripts/build_linux.sh
+```
+This installs `pyinstaller` alongside the runtime deps and produces
+`dist/MiFlashX`, a single-file executable.
 
-### Initial Setup (Linux Specific)
+**5. Install it properly (recommended):**
+```bash
+chmod +x packaging/install.sh
+./packaging/install.sh
+```
+This copies the binary to `~/.local/bin/miflashx`, generates icon sizes for
+the `hicolor` theme, and registers a `.desktop` entry — so MiFlashX shows
+up in your actual application launcher with a real icon, not just as a
+binary you run from a terminal. No `sudo` needed; it's a per-user install.
 
-When you first run MiFlashX on Linux, you might see "Udev Rules (Linux): Not Found" or "Udev Rules (Linux): Incomplete" messages. This means your system needs proper permissions to interact with Android devices via USB without `sudo` for every command.
+Alternatively, just run the built binary directly without installing:
+```bash
+./dist/MiFlashX
+```
 
-1.  **Click "Fix Udev Rules (Linux)":** This will attempt to create/update `/etc/udev/rules.d/51-android.rules`. You will be prompted for your `sudo` password in the terminal where you launched MiFlashX.
-2.  **Click "Add User to 'adbusers' group (Linux)":** This will add your current user to the `adbusers` group, which is often used for USB device access. You will also be prompted for your `sudo` password.
-3.  **Log Out and Log Back In:** **This is crucial\!** Changes to user groups only take effect after a full logout and login (or a system reboot). Do this after adding your user to the `adbusers` group.
+## Theming 🎨
 
-### Flashing a Fastboot ROM
+**View → Theme** in the menu bar offers **Follow System / Light / Dark**,
+saved across restarts.
 
-1.  **Unlock Bootloader (Crucial Prerequisite):**
+Why this exists: Qt only knows your desktop's dark-mode state or accent
+color if something bridges Qt to your desktop's actual theming system —
+`qt6ct` (most distros), `adwaita-qt6` (GNOME specifically), or KDE's native
+Breeze integration. **Stock Fedora Workstation doesn't ship any of these by
+default**, so without installing one yourself, `Follow System` will look
+identical to plain Fusion regardless of what your GNOME dark-mode toggle
+says. `Light` and `Dark` sidestep this entirely with hand-built palettes
+that work the same on every distro, with or without theme integration
+installed.
 
-      * **Your Xiaomi device's bootloader MUST be officially unlocked** before you can flash Fastboot ROMs.
-      * This process typically involves using Xiaomi's official Mi Unlock Tool, which usually runs on Windows. Follow Xiaomi's official instructions for bootloader unlocking for your specific device model. MiFlashX cannot unlock your bootloader.
-      * **WARNING:** Unlocking the bootloader will wipe all data on your device.
+If you *do* have `qt6ct` or `adwaita-qt6` set up and want `Follow System`
+to actually follow it, that should already work — it restores whatever
+palette Qt reported at startup.
 
-2.  **Download Fastboot ROM:**
+## Usage 📝
 
-      * Obtain the correct Fastboot ROM (`.tgz` or `.tar.gz` file) for your *exact* Xiaomi device model from a reliable source (e.g., Xiaomi's official MIUI ROM download page, XDA Developers forums).
-      * **Do NOT use Recovery ROMs (.zip) or ROMs for other devices\!** This can brick your device.
+### First-time Linux setup
 
-3.  **Connect Device in Fastboot Mode:**
+On first launch, MiFlashX checks for `udev` rules and `adbusers` group
+membership and shows their status. If either is missing:
 
-      * Power off your Xiaomi device completely.
-      * Hold down the **Volume Down** button and the **Power** button simultaneously until you see the Fastboot screen (usually an Android robot or a Mi Bunny).
-      * Connect your device to your computer using a high-quality USB cable.
+1. Click **"Fix Udev Rules"** / **"Add User to 'adbusers' group"**. Each
+   pops up your desktop's normal graphical authentication prompt
+   (via `pkexec`) — no terminal `sudo` password needed.
+2. **Log out and back in** after the `adbusers` group change — group
+   membership only takes effect on your next login, not immediately.
+3. Replug your device.
 
-4.  **Use MiFlashX:**
+### Flashing a ROM
 
-      * Launch the MiFlashX application (`./dist/MiFlashX`).
-      * **Device Detection:** The "Device" status should change to "Connected" and display your device's serial number and bootloader status. If it shows "Locked," you cannot proceed.
-      * **Browse ROM:** Click the "Browse" button in the "ROM Selection & Extraction" section and select your downloaded `.tgz` Fastboot ROM file.
-      * **Extract ROM:** Click the "Extract ROM" button. The application will extract the ROM contents into the `roms/` directory within your MiFlashX project folder. This may take some time.
-      * **Select Flashing Mode:** Choose your desired flashing mode from the "Flashing Options" dropdown:
-          * **Flash all (clean install, wipe all data):** Recommended for major version upgrades or fixing deep software issues. **Wipes everything.**
-          * **Flash all except storage (keep user data):** Attempts to keep your personal files (photos, documents) but wipes apps and system data.
-          * **Flash all except data and storage (safest for updates, keeps apps and data):** Generally used for minor updates or if you want to preserve your installed apps and their data.
-      * **Start Flashing:** Click the "Start Flashing" button. A confirmation dialog will appear. Read it carefully.
-      * **Confirm:** If you are ready, confirm the operation. The flashing process will begin, and you'll see real-time output in the "Log Output" section.
-      * **DO NOT DISCONNECT YOUR DEVICE** during the flashing process.
-      * **Wait:** The flashing process can take several minutes. Once complete, your device should automatically reboot. The first boot after flashing may take longer than usual.
+1. **Unlock your bootloader officially first** (Xiaomi's Mi Unlock Tool —
+   Windows only, unrelated to this app). MiFlashX cannot do this for you,
+   and it will refuse to flash a locked device. This wipes your data.
+2. **Download the correct Fastboot ROM** for your *exact* device model —
+   `.tgz`/`.tar.gz` only, never a Recovery `.zip`, and never another
+   device's ROM. Wrong ROM = bricked device.
+3. **Boot your device into Fastboot mode** (Volume Down + Power while
+   powered off) and connect it via USB. MiFlashX should detect it within a
+   couple of seconds — no restart or manual refresh needed.
+4. **Get the ROM into a usable folder**, either:
+   - **Browse → Extract ROM**: point at the archive, extract it once, or
+   - **Use Already-Extracted ROM Folder…**: if you've extracted this ROM
+     before and it's still on disk, skip straight to this — no need to
+     re-extract.
+5. **Pick a flashing mode** from the dropdown and click **Start Flashing**.
+   Read the confirmation dialog — it calls out exactly what each mode does
+   and doesn't wipe.
+6. **Don't disconnect the device.** Flashing can take several minutes; the
+   device reboots on its own when done. First boot afterward is slow —
+   that's normal.
 
 ## Troubleshooting ⚠️
 
-  * **"ADB/Fastboot: Not Found"**:
-      * Ensure you have downloaded `platform-tools-latest-linux.zip` and copied its contents (`adb`, `fastboot`) into `miflashx/platform-tools/`.
-      * Verify that `adb` and `fastboot` in `miflashx/platform-tools/` have executable permissions (`chmod +x adb fastboot`).
-      * If you want to use system-wide tools, ensure they are installed (e.g., `sudo apt install android-tools-adb android-tools-fastboot` on Debian/Ubuntu) and in your system's PATH.
-  * **"Udev Rules (Linux): Not Found/Incomplete" / "no permissions" errors**:
-      * Click the "Fix Udev Rules (Linux)" button in the GUI. Provide your `sudo` password in the terminal.
-      * Click the "Add User to 'adbusers' group (Linux)" button. Provide your `sudo` password.
-      * **Crucially, log out of your Linux session and log back in** for the group changes to take effect.
-      * Replug your device after performing these steps.
-  * **Device not detected / `<waiting for any device>`**:
-      * Ensure your device is in Fastboot mode (Volume Down + Power).
-      * Check your USB cable and port. Try a different cable or port.
-      * Verify `udev` rules and user group membership (see above).
-      * Restart MiFlashX.
-      * From a terminal, try `sudo fastboot devices` to see if it detects the device with root privileges. If it does, it's a permission issue.
-  * **Flashing fails / Device bricks**:
-      * **Did you unlock the bootloader?** This is the most common reason for failure.
-      * **Is it the correct ROM for your device?** Using the wrong ROM will brick your device.
-      * **Did you disconnect the device?** Never disconnect during flashing.
-      * Check the log output in the application for specific error messages.
-      * Ensure your device battery is sufficiently charged.
-  * **"Error loading font" / Text looks weird**:
-      * The `generate_icon.py` script tries to find common system fonts. If it fails, it uses a basic default. For better aesthetics, you can manually specify a `font_path` in `generate_icon.py` to a font file that exists on your system.
+* **"ADB/Fastboot: Not Found"** — populate `platform-tools/` as described
+  above, or install `android-tools` (or your distro's equivalent package)
+  system-wide and ensure it's on `PATH`.
+* **Udev/permissions errors, or "Fix Udev Rules" does nothing visible** —
+  make sure `pkexec` is installed and a polkit authentication agent is
+  running (standard on GNOME/KDE sessions; may be missing on a bare window
+  manager). Check `~/.local/share/miflashx/logs/miflashx.log` for the
+  specific failure if the graphical prompt never appears.
+* **Device not detected** — confirm Fastboot mode, try a different cable
+  and port, and check `sudo fastboot devices` from a terminal: if that
+  detects it but MiFlashX doesn't, it's a udev/permissions problem, not a
+  MiFlashX bug — revisit the setup step above.
+* **Theme doesn't match my desktop** — see [Theming](#theming-); pick
+  Light or Dark manually rather than relying on Follow System unless you've
+  specifically set up `qt6ct`/`adwaita-qt6`.
+* **Flashing fails** — check the bootloader is actually unlocked (most
+  common cause), confirm the ROM matches your exact device model, and read
+  the Log Output panel for the actual error rather than just the failure
+  dialog.
+* **Building fails with a PyQt6 import error** — you're likely missing one
+  of the system Qt/XCB libraries listed under Requirements above; this is
+  the most common build failure on minimal installs and CI runners.
 
 ## Contributing 🤝
 
-If you find bugs, have feature requests, or want to contribute code, please refer to the project's repository (if applicable) for guidelines.
+Issues and pull requests welcome — see [CHANGELOG.md](CHANGELOG.md) for
+what's changed recently and why, which is useful context before touching
+`gui.py` or `core.py` in particular.
 
 ## License 📄
 
-This project is open-source. Please refer to the `LICENSE` file in the project root for details (you would typically include a LICENSE file like MIT, GPL, etc., here).
-
-```
-```
+Open-source — see the `LICENSE` file in the project root.
