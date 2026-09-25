@@ -9,12 +9,59 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QTextEdit, QComboBox, QFileDialog, QGroupBox,
                              QMessageBox, QProgressBar, QSizePolicy, QSpacerItem,
                              QStatusBar, QGraphicsDropShadowEffect, QGraphicsOpacityEffect)
-from PyQt6.QtCore import QThread, pyqtSignal, QPropertyAnimation, QEasingCurve, QByteArray
-from PyQt6.QtGui import QIcon, QFont, QColor
+from PyQt6.QtCore import QThread, pyqtSignal, QPropertyAnimation, QEasingCurve, QByteArray, QSettings
+from PyQt6.QtGui import QIcon, QFont, QColor, QPalette, QAction, QActionGroup
 
 from core import FlashingCore, FlashModes
 from utils import log_message, get_os, check_udev_rules, install_udev_rules, add_to_adbusers_group, find_adb_fastboot
 from device_monitor import DeviceMonitor, DeviceState
+
+
+def _build_palette(dark: bool) -> QPalette:
+    """
+    Explicit, self-contained Light/Dark palettes.
+
+    Why not rely on the system palette for this: on Fedora Workstation (and
+    other GNOME setups) without qt6ct or adwaita-qt installed, Qt has no
+    bridge to GTK's theme/dark-mode/accent settings at all. QApplication
+    silently falls back to the plain "Fusion" style with ITS default light
+    palette, no matter what the desktop's dark mode or accent color is set
+    to — there's nothing to "detect" because the OS never told Qt anything.
+    So Light/Dark here are built by hand and paired with an explicit
+    `app.setStyle("Fusion")`, which guarantees the switch actually takes
+    effect on every distro, not just ones with the right Qt glue installed.
+    """
+    pal = QPalette()
+
+    if dark:
+        window = QColor(45, 45, 48)
+        base = QColor(35, 35, 38)
+        text = QColor(230, 230, 230)
+        button = QColor(55, 55, 59)
+        accent = QColor(66, 133, 244)
+        disabled_text = QColor(120, 120, 120)
+    else:
+        window = QColor(240, 240, 242)
+        base = QColor(255, 255, 255)
+        text = QColor(20, 20, 20)
+        button = QColor(240, 240, 242)
+        accent = QColor(25, 100, 210)
+        disabled_text = QColor(160, 160, 160)
+
+    pal.setColor(QPalette.ColorRole.Window, window)
+    pal.setColor(QPalette.ColorRole.WindowText, text)
+    pal.setColor(QPalette.ColorRole.Base, base)
+    pal.setColor(QPalette.ColorRole.AlternateBase, window)
+    pal.setColor(QPalette.ColorRole.Text, text)
+    pal.setColor(QPalette.ColorRole.Button, button)
+    pal.setColor(QPalette.ColorRole.ButtonText, text)
+    pal.setColor(QPalette.ColorRole.Mid, window.darker(115) if dark else window.darker(108))
+    pal.setColor(QPalette.ColorRole.Highlight, accent)
+    pal.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
+    pal.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, disabled_text)
+    pal.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, disabled_text)
+
+    return pal
 
 
 # Worker Thread for long-running operations (ROM extraction, flashing, udev tasks).
@@ -107,6 +154,11 @@ class MiFlashX(QMainWindow):
         self.device_monitor = None
         self._info_worker = None
 
+        self.settings = QSettings("miflashx", "MiFlashX")
+        saved_theme = self.settings.value("theme", "system")
+
+        self.init_menu_bar(saved_theme)
+        self.apply_theme(saved_theme, persist=False)  # already the saved value; no need to re-save
         self.init_ui()
         self.apply_card_theme()
         self.check_initial_setup()
@@ -114,6 +166,64 @@ class MiFlashX(QMainWindow):
         if self.flashing_core:
             self.device_monitor = DeviceMonitor(self.fastboot_path, parent=self)
             self.device_monitor.device_changed.connect(self.on_device_state_changed)
+
+    def init_menu_bar(self, current_theme: str):
+        """View > Theme menu with a checkable Follow System / Light / Dark group."""
+        menu_bar = self.menuBar()
+        view_menu = menu_bar.addMenu("&View")
+        theme_menu = view_menu.addMenu("Theme")
+
+        self._theme_actions = {}
+        theme_group = QActionGroup(self)
+        theme_group.setExclusive(True)
+
+        for key, label in (("system", "Follow System"), ("light", "Light"), ("dark", "Dark")):
+            action = QAction(label, self, checkable=True)
+            action.setChecked(key == current_theme)
+            action.triggered.connect(lambda checked, k=key: self.apply_theme(k))
+            theme_group.addAction(action)
+            theme_menu.addAction(action)
+            self._theme_actions[key] = action
+
+    def apply_theme(self, theme: str, persist: bool = True):
+        """
+        Switches the whole application's style/palette, then rebuilds this
+        window's card stylesheet to match. 'light' and 'dark' use the
+        explicit palettes in _build_palette() paired with the Fusion style,
+        which works regardless of whether the desktop has Qt theme
+        integration installed. 'system' restores whatever QApplication
+        started with (see main.py, which stashes it before anything
+        overrides it).
+        """
+        app = QApplication.instance()
+
+        if theme == "dark":
+            app.setStyle("Fusion")
+            app.setPalette(_build_palette(dark=True))
+        elif theme == "light":
+            app.setStyle("Fusion")
+            app.setPalette(_build_palette(dark=False))
+        else:  # "system"
+            theme = "system"
+            original_style = app.property("_original_style_name")
+            original_palette = app.property("_original_palette")
+            if original_style:
+                app.setStyle(original_style)
+            if original_palette is not None:
+                app.setPalette(original_palette)
+
+        if persist:
+            self.settings.setValue("theme", theme)
+
+        if hasattr(self, '_theme_actions') and theme in self._theme_actions:
+            self._theme_actions[theme].setChecked(True)
+
+        # The card stylesheet was baked from a snapshot of palette colors
+        # (see apply_card_theme's docstring), so it has to be rebuilt
+        # explicitly whenever the underlying palette changes — it doesn't
+        # update itself just because QApplication.setPalette() was called.
+        if hasattr(self, '_cards'):
+            self.apply_card_theme()
 
     def closeEvent(self, event):
         if self.device_monitor:
@@ -254,12 +364,19 @@ class MiFlashX(QMainWindow):
 
     def apply_card_theme(self):
         """
-        Builds a stylesheet from the CURRENT system palette (not hardcoded
-        colors), so the "card" look — rounded corners, spacing, hover states —
-        adapts to light/dark mode and whatever accent color the desktop theme
-        provides, instead of fighting it the way the old QSS did.
+        Builds a stylesheet from the CURRENT application palette (not
+        hardcoded colors), so the "card" look — rounded corners, spacing,
+        hover states — adapts to light/dark mode and whatever accent color
+        is active, instead of fighting it the way the old QSS did.
+
+        Reads QApplication.instance().palette() rather than self.palette():
+        immediately after apply_theme() calls app.setPalette(), this widget's
+        own cached palette hasn't necessarily been re-resolved yet (that
+        propagation happens via an event Qt hasn't processed at this point in
+        the same call stack), so self.palette() can return stale colors here.
+        The application-level palette is always current.
         """
-        pal = self.palette()
+        pal = QApplication.instance().palette()
         base = pal.color(pal.ColorRole.Base)
         window = pal.color(pal.ColorRole.Window)
         text = pal.color(pal.ColorRole.Text)

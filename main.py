@@ -32,9 +32,22 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("MiFlashX")
     app.setOrganizationName("miflashx")
-    # No app.setStyle(...) call: leaving this unset lets Qt6's platform theme
-    # plugin (qt6ct, QT_QPA_PLATFORMTHEME=gtk3, native Breeze on KDE, etc.)
-    # pick the style that matches the user's actual desktop environment.
+    # No app.setStyle(...) call here: leaving this unset lets Qt6's platform
+    # theme plugin (qt6ct, QT_QPA_PLATFORMTHEME=gtk3, native Breeze on KDE,
+    # etc.) pick the style that matches the user's actual desktop environment
+    # — when such integration exists. On setups without it (bare Fedora
+    # Workstation with no qt6ct/adwaita-qt installed), Qt has no bridge to
+    # the desktop's theme at all and silently falls back to plain Fusion
+    # with its default light palette. gui.py's manual Light/Dark theme
+    # switcher exists specifically for that case.
+    #
+    # Stash the ORIGINAL style name and palette as properties on the
+    # QApplication instance before anything touches them. This is what lets
+    # "Follow System" in the theme menu restore the true starting state
+    # later, even after the user has switched to the manual Fusion-based
+    # Light/Dark palettes.
+    app.setProperty("_original_style_name", app.style().objectName())
+    app.setProperty("_original_palette", app.palette())
 
     log_message('info', 'MiFlashX application starting.')
 
