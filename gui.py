@@ -8,9 +8,9 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QLineEdit, QLabel,
                              QTextEdit, QComboBox, QFileDialog, QGroupBox,
                              QMessageBox, QProgressBar, QSizePolicy, QSpacerItem,
-                             QStatusBar)
-from PyQt6.QtCore import QThread, pyqtSignal
-from PyQt6.QtGui import QIcon, QFont
+                             QStatusBar, QGraphicsDropShadowEffect, QGraphicsOpacityEffect)
+from PyQt6.QtCore import QThread, pyqtSignal, QPropertyAnimation, QEasingCurve, QByteArray
+from PyQt6.QtGui import QIcon, QFont, QColor
 
 from core import FlashingCore, FlashModes
 from utils import log_message, get_os, check_udev_rules, install_udev_rules, add_to_adbusers_group, find_adb_fastboot
@@ -18,6 +18,7 @@ from device_monitor import DeviceMonitor, DeviceState
 
 
 # Worker Thread for long-running operations (ROM extraction, flashing, udev tasks).
+
 #
 # Bug fixed here: the previous version unconditionally injected an
 # output_callback kwarg into every function it called. That's only valid for
@@ -107,7 +108,7 @@ class MiFlashX(QMainWindow):
         self._info_worker = None
 
         self.init_ui()
-        # No apply_qss() call anymore — see module docstring below for why.
+        self.apply_card_theme()
         self.check_initial_setup()
 
         if self.flashing_core:
@@ -122,12 +123,15 @@ class MiFlashX(QMainWindow):
     def init_ui(self):
         """Initializes the main graphical user interface elements."""
         central_widget = QWidget()
+        central_widget.setObjectName("centralArea")
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
-        main_layout.setSpacing(15)
+        main_layout.setSpacing(18)
+        main_layout.setContentsMargins(18, 18, 18, 18)
 
         # --- System Status & Device Info Group ---
         status_group = QGroupBox("System Status & Device Info")
+        status_group.setObjectName("card")
         status_layout = QVBoxLayout(status_group)
         status_layout.setSpacing(8)
 
@@ -162,6 +166,7 @@ class MiFlashX(QMainWindow):
 
         # --- ROM Selection Section ---
         rom_selection_group = QGroupBox("ROM Selection & Extraction")
+        rom_selection_group.setObjectName("card")
         rom_selection_layout = QVBoxLayout(rom_selection_group)
         rom_selection_layout.setSpacing(10)
 
@@ -187,6 +192,7 @@ class MiFlashX(QMainWindow):
 
         # --- Flashing Options Section ---
         flashing_group = QGroupBox("Flashing Options")
+        flashing_group.setObjectName("card")
         flashing_layout = QVBoxLayout(flashing_group)
         flashing_layout.setSpacing(10)
 
@@ -207,6 +213,7 @@ class MiFlashX(QMainWindow):
 
         # --- Progress & Log Section ---
         log_group = QGroupBox("Log Output")
+        log_group.setObjectName("card")
         log_layout = QVBoxLayout(log_group)
         self.log_output = QTextEdit()
         self.log_output.setReadOnly(True)
@@ -226,15 +233,160 @@ class MiFlashX(QMainWindow):
         self.setStatusBar(self.statusBar)
         self.statusBar.showMessage("Ready")
 
-    # apply_qss() has been removed entirely. The old version hardcoded a
-    # light-theme-only stylesheet (#f0f2f5 backgrounds, #333333 text, etc.)
-    # across every widget type, which fought whatever GTK/Breeze/etc. theme
-    # the user's desktop was actually running and looked wrong in dark mode.
-    # Qt6's platform theme integration (qt6ct, QT_QPA_PLATFORMTHEME=gtk3, or
-    # native Breeze on KDE) already makes an unstyled QWidget app match the
-    # system theme, light or dark, automatically. The status-color spans
-    # below (green/red in labels) are semantic indicators, not theming, and
-    # are left as-is — they read fine against both light and dark palettes.
+        # Give the primary action its own accent styling and mark the four
+        # sections as "cards" so apply_card_theme() can give each a drop
+        # shadow — the actual elevation effect a stylesheet alone can't do.
+        self.flash_button.setObjectName("primaryButton")
+        self._cards = [status_group, rom_selection_group, flashing_group, log_group]
+
+        # Animate progress bar value changes instead of jumping instantly —
+        # set_progress() below is what the rest of the app should call.
+        self._progress_anim = QPropertyAnimation(self.progress_bar, QByteArray(b"value"), self)
+        self._progress_anim.setDuration(300)
+        self._progress_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+    def set_progress(self, value: int):
+        """Animate the progress bar to `value` instead of jumping instantly."""
+        self._progress_anim.stop()
+        self._progress_anim.setStartValue(self.progress_bar.value())
+        self._progress_anim.setEndValue(value)
+        self._progress_anim.start()
+
+    def apply_card_theme(self):
+        """
+        Builds a stylesheet from the CURRENT system palette (not hardcoded
+        colors), so the "card" look — rounded corners, spacing, hover states —
+        adapts to light/dark mode and whatever accent color the desktop theme
+        provides, instead of fighting it the way the old QSS did.
+        """
+        pal = self.palette()
+        base = pal.color(pal.ColorRole.Base)
+        window = pal.color(pal.ColorRole.Window)
+        text = pal.color(pal.ColorRole.Text)
+        accent = pal.color(pal.ColorRole.Highlight)
+        mid = pal.color(pal.ColorRole.Mid)
+
+        # A card needs to read as a distinct surface from the window behind
+        # it. If the theme's Base and Window colors are too close (some
+        # themes set them nearly identical), nudge the card surface instead
+        # of silently rendering a flat, undifferentiated page.
+        def _luminance(c: QColor) -> float:
+            return 0.299 * c.red() + 0.587 * c.green() + 0.114 * c.blue()
+
+        is_dark = _luminance(window) < 128
+        card_bg = base.lighter(106) if is_dark else base
+        border = mid.name()
+        accent_hover = accent.lighter(115).name()
+        accent_pressed = accent.darker(110).name()
+
+        self.setStyleSheet(f"""
+            QWidget#centralArea {{
+                background-color: {window.name()};
+            }}
+
+            QGroupBox#card {{
+                background-color: {card_bg.name()};
+                border: 1px solid {border};
+                border-radius: 10px;
+                margin-top: 14px;
+                padding: 14px 10px 10px 10px;
+                font-weight: 600;
+            }}
+            QGroupBox#card::title {{
+                subcontrol-origin: margin;
+                left: 12px;
+                padding: 0 6px;
+                color: {text.name()};
+            }}
+
+            QPushButton {{
+                background-color: {base.name()};
+                border: 1px solid {border};
+                border-radius: 6px;
+                padding: 7px 14px;
+            }}
+            QPushButton:hover:!disabled {{
+                border-color: {accent.name()};
+            }}
+            QPushButton:pressed:!disabled {{
+                background-color: {mid.lighter(115).name()};
+            }}
+            QPushButton:disabled {{
+                color: {mid.name()};
+            }}
+
+            QPushButton#primaryButton:!disabled {{
+                background-color: {accent.name()};
+                color: {pal.color(pal.ColorRole.HighlightedText).name()};
+                border: none;
+                font-weight: 600;
+            }}
+            QPushButton#primaryButton:hover:!disabled {{
+                background-color: {accent_hover};
+            }}
+            QPushButton#primaryButton:pressed:!disabled {{
+                background-color: {accent_pressed};
+            }}
+
+            QLineEdit, QComboBox, QTextEdit {{
+                background-color: {base.name()};
+                border: 1px solid {border};
+                border-radius: 6px;
+                padding: 5px;
+            }}
+            QLineEdit:focus, QComboBox:focus {{
+                border-color: {accent.name()};
+            }}
+
+            QProgressBar {{
+                border: 1px solid {border};
+                border-radius: 6px;
+                text-align: center;
+                background-color: {base.name()};
+            }}
+            QProgressBar::chunk {{
+                background-color: {accent.name()};
+                border-radius: 5px;
+            }}
+        """)
+
+        # Elevation: a real drop shadow per card, not just a border. This is
+        # the part a stylesheet genuinely cannot do on its own.
+        shadow_color = QColor(0, 0, 0, 90 if is_dark else 45)
+        for card in self._cards:
+            effect = QGraphicsDropShadowEffect(card)
+            effect.setBlurRadius(18)
+            effect.setOffset(0, 3)
+            effect.setColor(shadow_color)
+            card.setGraphicsEffect(effect)
+
+    def showEvent(self, event):
+        """Fade the window in on first show — a small touch, but it's the
+        one animation every user sees, every time, on every desktop."""
+        super().showEvent(event)
+        if not getattr(self, '_fade_played', False):
+            self._fade_played = True
+            self.setWindowOpacity(0.0)
+            self._fade_anim = QPropertyAnimation(self, QByteArray(b"windowOpacity"), self)
+            self._fade_anim.setDuration(220)
+            self._fade_anim.setStartValue(0.0)
+            self._fade_anim.setEndValue(1.0)
+            self._fade_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            self._fade_anim.start()
+
+    def _pulse_label(self, label: QLabel):
+        """Brief opacity pulse to draw the eye to a status change (e.g. a
+        device just connected) without anything as heavy-handed as a popup."""
+        effect = QGraphicsOpacityEffect(label)
+        label.setGraphicsEffect(effect)
+        anim = QPropertyAnimation(effect, QByteArray(b"opacity"), label)
+        anim.setDuration(450)
+        anim.setStartValue(0.25)
+        anim.setEndValue(1.0)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.start()
+        # Keep a reference so it isn't garbage-collected mid-animation.
+        label._pulse_anim = anim
 
     def append_log(self, message):
         """Appends a message to the log output QTextEdit and the file log."""
@@ -334,6 +486,7 @@ class MiFlashX(QMainWindow):
         if state.connected and state.serial != self.current_serial:
             self.current_serial = state.serial
             self.device_status_label.setText(f"Device: <font color='green'>Connected ({state.serial})</font>")
+            self._pulse_label(self.device_status_label)
             self.append_log(f'[INFO] Device connected: {state.serial}')
 
             # Fetch getvar-all info on a background thread rather than inline.
@@ -346,6 +499,7 @@ class MiFlashX(QMainWindow):
             self.current_device_codename = "Unknown"
             self.current_bootloader_status = "Unknown"
             self.device_status_label.setText("Device: <font color='red'>Disconnected</font>")
+            self._pulse_label(self.device_status_label)
             self.device_info_label.setText("Info: N/A")
             self.flash_button.setEnabled(False)
             self.append_log('[INFO] Device disconnected.')
@@ -393,7 +547,7 @@ class MiFlashX(QMainWindow):
 
         def on_extract_finished(success, message):
             self.set_ui_enabled(True)
-            self.progress_bar.setValue(100 if success else 0)
+            self.set_progress(100 if success else 0)
             self.progress_bar.setFormat("Extraction: %p%")
             if success:
                 self.extracted_rom_path = message
@@ -462,7 +616,7 @@ class MiFlashX(QMainWindow):
 
         def on_flash_finished(success, message):
             self.set_ui_enabled(True)
-            self.progress_bar.setValue(100 if success else 0)
+            self.set_progress(100 if success else 0)
             self.progress_bar.setFormat("Flashing: %p%")
             if success:
                 QMessageBox.information(self, "Flashing Complete", "ROM flashed successfully! Your device should now reboot. First boot may take a while.")
