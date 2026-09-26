@@ -34,7 +34,7 @@ APP_NAME="MiFlashX"
 
 # Install PyInstaller, PyQt6, Pillow if they are not already installed
 echo "Installing/updating Python dependencies..."
-pip install -r requirements.txt pyinstaller
+pip install -r requirements.txt "pyinstaller>=6.10.0"
 
 # Remove previous build artifacts to ensure a clean slate
 echo "Cleaning up previous build artifacts..."

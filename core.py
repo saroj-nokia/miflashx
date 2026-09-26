@@ -15,6 +15,58 @@ class FlashModes:
     SAVE_DATA_AND_STORAGE = "except_data_storage"
 
 
+def _assert_within(base_dir: str, member_path: str):
+    """
+    Raises ValueError if `member_path` (a path from inside an archive) would
+    resolve outside `base_dir` once joined and normalized.
+
+    This guards against "Zip Slip" / "Tar Slip" (the same vulnerability class
+    as CVE-2007-4559): an archive entry named e.g. '../../.bashrc' or an
+    absolute path like '/etc/cron.d/x' extracts to wherever it names, not
+    inside the intended folder — tarfile/zipfile's extractall() does not
+    prevent this on its own in older Python versions. Since MiFlashX's whole
+    point is extracting ROM archives downloaded from third-party sources
+    (XDA, random mirrors — see README), a malicious file offered as a "ROM"
+    is a realistic threat model here, not a theoretical one.
+    """
+    base_real = os.path.realpath(base_dir)
+    target_real = os.path.realpath(os.path.join(base_dir, member_path))
+    if target_real != base_real and not target_real.startswith(base_real + os.sep):
+        raise ValueError(
+            f"Refusing to extract '{member_path}': it resolves outside the "
+            f"target directory. This archive entry is either malicious or "
+            f"corrupt."
+        )
+
+
+def _safe_extract_tar(tar: tarfile.TarFile, path: str):
+    """
+    Validates every member's path (and, for symlinks/hardlinks, their link
+    target) stays within `path` before extracting anything, then extracts.
+    Also passes filter='data' where available (Python 3.12+, PEP 706) as a
+    second, independent layer of protection — the manual check above is what
+    makes this safe on 3.10/3.11 too, where that parameter doesn't exist.
+    """
+    for member in tar.getmembers():
+        _assert_within(path, member.name)
+        if member.issym() or member.islnk():
+            _assert_within(path, os.path.join(os.path.dirname(member.name), member.linkname))
+
+    try:
+        tar.extractall(path=path, filter='data')
+    except TypeError:
+        # Python < 3.12 has no `filter` parameter — the manual validation
+        # above already vetted every member, so plain extractall() is safe.
+        tar.extractall(path=path)
+
+
+def _safe_extract_zip(zip_ref: zipfile.ZipFile, path: str):
+    """Same guard as _safe_extract_tar, for ZIP archives."""
+    for name in zip_ref.namelist():
+        _assert_within(path, name)
+    zip_ref.extractall(path)
+
+
 # The three script basenames flash_rom() ever looks for (see below) — kept
 # here as the single source of truth so validation and actual flashing can't
 # drift out of sync with each other.
@@ -167,10 +219,11 @@ class FlashingCore:
 
     def extract_rom(self, rom_file_path, extract_base_dir):
         """
-        Extracts a .tgz Fastboot ROM archive. If it contains a nested .zip or .tar,
-        it extracts that too. Unchanged from the original — this logic uses
-        Python's tarfile/zipfile directly, not subprocess, so it wasn't part of
-        the deadlock bug.
+        Extracts a .tgz Fastboot ROM archive. If it contains a nested .zip or
+        .tar, it extracts that too. Uses Python's tarfile/zipfile directly
+        (not subprocess), routed through _safe_extract_tar/_safe_extract_zip
+        to guard against path-traversal ("Zip Slip") entries in a malicious
+        archive.
         Returns (True, extracted_directory_path) on success, (False, error_message) on failure.
         """
         if not os.path.exists(rom_file_path):
@@ -201,7 +254,7 @@ class FlashingCore:
 
         try:
             with tarfile.open(rom_file_path, "r:gz") as tar:
-                tar.extractall(path=initial_extracted_full_path)
+                _safe_extract_tar(tar, initial_extracted_full_path)
             self._emit_status("Primary archive extraction complete.")
 
             nested_archive_file = None
@@ -248,7 +301,7 @@ class FlashingCore:
 
                 if nested_archive_type == 'zip':
                     with zipfile.ZipFile(nested_archive_file, 'r') as zip_ref:
-                        zip_ref.extractall(final_extracted_full_path)
+                        _safe_extract_zip(zip_ref, final_extracted_full_path)
                 elif nested_archive_type == 'tar':
                     tar_mode = "r"
                     if nested_archive_file.lower().endswith('.gz') or nested_archive_file.lower().endswith('.tgz'):
@@ -257,7 +310,7 @@ class FlashingCore:
                         tar_mode = "r:bz2"
 
                     with tarfile.open(nested_archive_file, tar_mode) as tar_ref:
-                        tar_ref.extractall(final_extracted_full_path)
+                        _safe_extract_tar(tar_ref, final_extracted_full_path)
 
                 self._emit_status(f"Nested {nested_archive_type.upper()} extraction complete.")
 

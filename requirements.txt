@@ -1,3 +1,18 @@
-PyQt6
-Pillow
-pyudev
+# Minimum versions set to exclude known CVEs (audited 2026-09):
+# - PyQt6 >=6.9.3: excludes CVE-2025-5455 (QtCore DoS) and CVE-2025-10729
+#   (Qt SVG use-after-free), both fixed in the Qt 6.9.3 bugfix round.
+# - Pillow >=12.3.0: excludes several 2026 CVEs (buffer overflows via crafted
+#   fonts/PSD/FITS/EPS input, CVE-2026-55798 command injection in
+#   ImageShow on Windows). Low direct exposure here since generate_icon.py
+#   only processes locally-generated content, not untrusted images, but no
+#   reason to sit below the fix.
+# - pyudev >=0.24.1: no specific CVE found against it; floor kept modern
+#   for good measure.
+PyQt6>=6.9.3
+Pillow>=12.3.0
+pyudev>=0.24.1
+
+# Build-only, not needed at runtime — installed separately by
+# build_scripts/build_linux.sh. >=6.10.0 excludes CVE-2025-59042, a local
+# privilege-escalation bug in PyInstaller's bootstrap process.
+# pyinstaller>=6.10.0
