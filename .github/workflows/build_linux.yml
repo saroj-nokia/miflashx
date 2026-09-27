@@ -9,6 +9,14 @@ on:
       - main
   workflow_dispatch:
 
+# Explicit least-privilege permissions for GITHUB_TOKEN. Without this block,
+# the token defaults to whatever the repository's broader default is, which
+# code scanners flag as excessive scope for a workflow that only needs to
+# read the repo and (on pull_request runs) interact with the PR.
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   build-linux:
     runs-on: ubuntu-latest
