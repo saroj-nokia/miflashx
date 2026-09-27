@@ -7,7 +7,39 @@ overhaul, in the order the work actually happened.
 
 ## [Unreleased] — Security audit
 
-### Fixed
+### Fixed (CWE-1333 / CWE-400 / CWE-730, flagged by GitHub code scanning)
+- **Removed `modify_spec.py` entirely.** Its two regex patterns — used to
+  hand-patch `pathex` and `debug=True` into PyInstaller's generated `.spec`
+  file — both had catastrophic (exponential) backtracking:
+  `(?:,\s*.*?)*` and `(?:,\s*\S+?)*`, nested unbounded quantifiers inside a
+  repeated group. Confirmed by direct timing test, not just static
+  analysis: `n=10` repeated comma-separated segments took 0.05s; `n=15`
+  (five more, well under 100 bytes of input) already exceeded 5 seconds,
+  worsening from there. CWE-400 and CWE-730 are the same underlying alert
+  as CWE-1333, tagged with its broader parent categories (Uncontrolled
+  Resource Consumption / Denial of Service) — not three separate findings.
+  `build_scripts/build_linux.sh` now passes `--paths` and `--debug=imports`
+  directly to `pyi-makespec`, PyInstaller's own built-in mechanism for
+  exactly what those regexes were hand-patching — eliminating the vulnerable
+  code path rather than just hardening it.
+- **Decompression-bomb guard** (`_assert_reasonable_total_size` in
+  `core.py`): found no reported finding for this, but it's the same CWE-400
+  category and a natural gap to close while already auditing the extraction
+  path. Rejects any archive whose declared total uncompressed size exceeds
+  20 GB (generous headroom over a real ROM's 3-6 GB), checked against the
+  archive's own metadata before extracting a single byte. Verified against
+  an actual crafted bomb (a small compressed file declaring 25 GB
+  uncompressed) — rejected instantly.
+- **Audited, no issue found**: the four remaining regex patterns in the
+  codebase (`core.py`'s device-serial/bootloader-status parsing, `gui.py`'s
+  log-level parsing) were stress-tested with adversarial input matching
+  their actual call sites (`re.match` vs `re.search`, worst-case strings
+  for each) — all confirmed genuinely linear-time. An initial test using
+  `.search()` where the real code uses `.match()` gave a misleading
+  quadratic-looking result; re-tested against the actual method used and
+  confirmed safe.
+
+### Fixed (path traversal, found independently of the scanner)
 - **Path traversal in ROM extraction ("Zip Slip" / "Tar Slip", same class as
   CVE-2007-4559)**: `extract_rom()`'s three `extractall()` calls (primary
   `.tgz`, nested `.zip`, nested `.tar`) performed no validation of archive

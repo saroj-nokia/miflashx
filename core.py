@@ -15,6 +15,13 @@ class FlashModes:
     SAVE_DATA_AND_STORAGE = "except_data_storage"
 
 
+# Generous cap on total uncompressed size for a single archive. Real Xiaomi
+# Fastboot ROMs run roughly 3-6 GB; 20 GB leaves ample headroom while still
+# catching a decompression bomb (CWE-400: a tiny archive crafted to expand
+# to an absurd size and exhaust disk space) before it can do damage.
+_MAX_UNCOMPRESSED_BYTES = 20 * 1024 * 1024 * 1024
+
+
 def _assert_within(base_dir: str, member_path: str):
     """
     Raises ValueError if `member_path` (a path from inside an archive) would
@@ -39,18 +46,41 @@ def _assert_within(base_dir: str, member_path: str):
         )
 
 
+def _assert_reasonable_total_size(total_bytes: int, archive_desc: str):
+    """
+    Raises ValueError if the archive's declared total uncompressed size
+    exceeds _MAX_UNCOMPRESSED_BYTES — a decompression-bomb guard
+    (CWE-400: Uncontrolled Resource Consumption). Checked against the
+    archive's own metadata BEFORE extracting anything, so a bomb is
+    rejected without ever writing the bytes it claims to contain.
+    """
+    if total_bytes > _MAX_UNCOMPRESSED_BYTES:
+        raise ValueError(
+            f"Refusing to extract {archive_desc}: it claims {total_bytes / (1024**3):.1f} GB "
+            f"uncompressed, which exceeds the {_MAX_UNCOMPRESSED_BYTES / (1024**3):.0f} GB "
+            f"safety limit. This is either a decompression bomb or a corrupt archive."
+        )
+
+
 def _safe_extract_tar(tar: tarfile.TarFile, path: str):
     """
     Validates every member's path (and, for symlinks/hardlinks, their link
-    target) stays within `path` before extracting anything, then extracts.
-    Also passes filter='data' where available (Python 3.12+, PEP 706) as a
-    second, independent layer of protection — the manual check above is what
-    makes this safe on 3.10/3.11 too, where that parameter doesn't exist.
+    target) stays within `path`, and that the archive's total declared size
+    is within a sane bound, before extracting anything. Also passes
+    filter='data' where available (Python 3.12+, PEP 706) as a second,
+    independent layer of the path-safety protection — the manual check
+    above is what makes this safe on 3.10/3.11 too, where that parameter
+    doesn't exist.
     """
-    for member in tar.getmembers():
+    members = tar.getmembers()
+    total_size = 0
+    for member in members:
         _assert_within(path, member.name)
         if member.issym() or member.islnk():
             _assert_within(path, os.path.join(os.path.dirname(member.name), member.linkname))
+        if member.isfile():
+            total_size += member.size
+    _assert_reasonable_total_size(total_size, "this archive")
 
     try:
         tar.extractall(path=path, filter='data')
@@ -61,9 +91,13 @@ def _safe_extract_tar(tar: tarfile.TarFile, path: str):
 
 
 def _safe_extract_zip(zip_ref: zipfile.ZipFile, path: str):
-    """Same guard as _safe_extract_tar, for ZIP archives."""
-    for name in zip_ref.namelist():
-        _assert_within(path, name)
+    """Same guards as _safe_extract_tar (path safety + size cap), for ZIP archives."""
+    infos = zip_ref.infolist()
+    total_size = 0
+    for info in infos:
+        _assert_within(path, info.filename)
+        total_size += info.file_size
+    _assert_reasonable_total_size(total_size, "this archive")
     zip_ref.extractall(path)
 
 

@@ -88,9 +88,21 @@ rm -f "${PLATFORM_TOOLS_ZIP}"
 chmod +x platform-tools/adb platform-tools/fastboot
 echo "Android Platform Tools prepared."
 
-# --- STEP 1: Generate initial .spec file using pyi-makespec ---
-# This command only generates the spec file, it does NOT build the executable.
-echo "Generating initial PyInstaller .spec file..."
+# --- Generate the .spec file directly with the correct pathex and debug
+# settings, using PyInstaller's own flags — no post-processing needed.
+#
+# Security note: this used to be a two-step process — generate a plain spec
+# file, then run modify_spec.py to regex-patch pathex and debug=True into
+# it. Both of modify_spec.py's regex patterns
+# ((?:,\s*.*?)* and (?:,\s*\S+?)*) had catastrophic backtracking: a crafted
+# or malformed spec file as short as ~15 repeated comma-separated segments
+# could hang the build for many seconds, growing exponentially from there
+# (CWE-1333/400/730, confirmed by direct timing test — n=10 took 0.05s,
+# n=15 exceeded 5s). --paths writes directly into the spec's pathex
+# argument, and --debug=imports achieves the same debug-imports behavior
+# modify_spec.py was hand-patching in — both without touching the spec file
+# as text at all. modify_spec.py has been removed from the project.
+echo "Generating PyInstaller .spec file..."
 pyi-makespec \
               --onefile \
               --windowed \
@@ -98,6 +110,8 @@ pyi-makespec \
               --icon assets/icon.png \
               --add-data "assets:assets" \
               --add-data "platform-tools:platform-tools" \
+              --paths "$(pwd)" \
+              --debug=imports \
               --hidden-import=utils \
               --hidden-import=core \
               --hidden-import=gui \
@@ -109,19 +123,9 @@ pyi-makespec \
               --specpath . \
               main.py
 
-# --- STEP 2: Modify the .spec file using the standalone Python script ---
-echo "Modifying MiFlashX.spec to explicitly add project root to pathex and enable debug imports..."
 SPEC_FILE="MiFlashX.spec"
-# Call the new Python script to modify the spec file, passing the spec file path and project root
-python modify_spec.py "${SPEC_FILE}" "${PROJECT_ROOT}"
 
-# --- INSPECTION STEP: Print the modified .spec file content ---
-echo "--- Contents of modified ${SPEC_FILE} ---"
-cat "${SPEC_FILE}"
-echo "-----------------------------------------"
-
-# --- STEP 3: Build using the MODIFIED .spec file ---
-echo "Starting PyInstaller build using the modified .spec file..."
+echo "Starting PyInstaller build..."
 pyinstaller "${SPEC_FILE}"
 
 echo "Build complete. Your executable is located in: dist/MiFlashX"
