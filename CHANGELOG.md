@@ -5,6 +5,45 @@ All notable changes to MiFlashX are documented here. Format loosely follows
 a formal release yet — everything below is grouped as one in-progress
 overhaul, in the order the work actually happened.
 
+## [Unreleased] — UI modernization
+
+### Added
+- **Header banner** at the top of the window (app icon, "MiFlashX" title,
+  subtitle), giving the UI a visual anchor instead of dropping straight
+  into the first card.
+- **Status icons on every status row** (ADB/Fastboot, udev rules,
+  `adbusers` group, device connection, extracted ROM): ✅ ok, ❌ missing,
+  ⚠️ needs attention, ⚪ not applicable, 🔄 checking, 🔌 device. Previously
+  status was conveyed by text color alone.
+- **Icons on all buttons** (🔧 Fix Udev Rules, 👤 Add User to group,
+  📁 Browse, 📦 Extract ROM, 📂 Use Already-Extracted ROM Folder,
+  ⚡ Start Flashing) for quicker scanning.
+
+### Changed
+- **Flashing mode picker is now a set of selectable options with
+  descriptions** (radio buttons with a risk icon and one-line explanation
+  each) instead of a collapsed dropdown. For a choice where one option
+  wipes the whole device, showing every trade-off at once beats hiding
+  them behind a combo box. This also fixes a safety issue in the old
+  dropdown: its first, and therefore pre-selected, item was the
+  destructive "wipe all data" option. The safest option ("keep apps and
+  data") is now both listed first and selected by default.
+- **"Start Flashing" is visually the primary action**: larger font and
+  extra padding so it stands out from secondary buttons.
+- Slightly larger card titles and more spacing between status rows, for
+  stronger visual hierarchy.
+
+### Fixed
+- **Near-invisible secondary text in dark mode.** The header subtitle, the
+  "— or, if you've already extracted this ROM before —" divider, and the
+  flashing-mode descriptions were styled with `color: palette(mid)`. `Mid`
+  is a border/separator role, and the dark palette deliberately makes it
+  darker than the window background, so text using it nearly vanished on
+  dark cards. `apply_card_theme()` now computes a muted text color by
+  blending the live text and window colors, and applies it to all such
+  labels centrally, so it re-applies correctly on every theme switch.
+  Verified by rendering both themes before and after.
+
 ## [Unreleased] — Security audit
 
 ### Fixed (CWE-1333 / CWE-400 / CWE-730, flagged by GitHub code scanning)

@@ -6,15 +6,44 @@ import subprocess
 
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QLineEdit, QLabel,
-                             QTextEdit, QComboBox, QFileDialog, QGroupBox,
+                             QTextEdit, QFileDialog, QGroupBox, QFrame,
+                             QRadioButton, QButtonGroup,
                              QMessageBox, QProgressBar, QSizePolicy, QSpacerItem,
                              QStatusBar, QGraphicsDropShadowEffect, QGraphicsOpacityEffect)
-from PyQt6.QtCore import QThread, pyqtSignal, QPropertyAnimation, QEasingCurve, QByteArray, QSettings
-from PyQt6.QtGui import QIcon, QFont, QColor, QPalette, QAction, QActionGroup
+from PyQt6.QtCore import QThread, pyqtSignal, QPropertyAnimation, QEasingCurve, QByteArray, QSettings, Qt
+from PyQt6.QtGui import QIcon, QFont, QColor, QPalette, QAction, QActionGroup, QPixmap
 
 from core import FlashingCore, FlashModes, validate_rom_directory
 from utils import log_message, get_os, check_udev_rules, install_udev_rules, add_to_adbusers_group, find_adb_fastboot
 from device_monitor import DeviceMonitor, DeviceState
+
+
+# Softer, slightly desaturated status colors — easier on the eye than pure
+# CSS "red"/"green"/"orange" in both light and dark mode.
+_STATUS_COLORS = {"ok": "#43a047", "bad": "#e53935", "warn": "#fb8c00"}
+_STATUS_ICONS = {"ok": "✅", "bad": "❌", "warn": "⚠️"}
+
+# Flashing mode metadata shared between the mode-card builder and the
+# lookup used when reading back the current selection — single source of
+# truth so the display title used in the confirmation dialog can never
+# drift out of sync with what the cards actually show.
+_FLASH_MODE_INFO = [
+    (FlashModes.SAVE_DATA_AND_STORAGE, "Safest — keep apps & data",
+     "Recommended for routine updates. Keeps your data and storage intact.", "ok"),
+    (FlashModes.SAVE_USER_DATA, "Keep user data",
+     "Wipes the system partition but preserves your user data.", "warn"),
+    (FlashModes.CLEAN_ALL, "Clean install",
+     "Wipes ALL data on the device. Make sure you have a backup.", "bad"),
+    (FlashModes.LOCK_BOOTLOADER, "Flash & lock bootloader",
+     "Extreme caution: locks the bootloader after flashing. Only use if you're certain of the ROM's integrity.", "bad"),
+]
+
+
+def _status_html(label: str, value: str, kind: str) -> str:
+    """Consistent 'Bold Label: [icon] value' formatting for status rows."""
+    color = _STATUS_COLORS.get(kind, "palette(mid)")
+    icon = _STATUS_ICONS.get(kind, "")
+    return f"<b>{label}:</b> {icon} <span style='color:{color}'>{value}</span>"
 
 
 def _build_palette(dark: bool) -> QPalette:
@@ -240,17 +269,56 @@ class MiFlashX(QMainWindow):
         main_layout.setSpacing(18)
         main_layout.setContentsMargins(18, 18, 18, 18)
 
+        # Secondary/muted-text labels (subtitle, "— or —" divider, flash-mode
+        # descriptions) register themselves here as (label, extra_css) pairs.
+        # apply_card_theme() computes a properly readable muted color from
+        # the live palette and applies it to all of them — see that method's
+        # docstring for why this can't just use "color: palette(mid)".
+        self._muted_labels = []
+
+        # --- Header banner: gives the app a visual anchor instead of
+        # dropping straight into the first card ---
+        header_layout = QHBoxLayout()
+        header_layout.setSpacing(14)
+
+        icon_label = QLabel()
+        icon_pixmap = QPixmap()
+        icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "icon.png")
+        if os.path.exists(icon_path):
+            icon_pixmap = QPixmap(icon_path)
+        if not icon_pixmap.isNull():
+            icon_label.setPixmap(icon_pixmap.scaled(48, 48, Qt.AspectRatioMode.KeepAspectRatio,
+                                                      Qt.TransformationMode.SmoothTransformation))
+        else:
+            icon_label.setText("📱")
+            icon_label.setStyleSheet("font-size: 32px;")
+        header_layout.addWidget(icon_label)
+
+        title_layout = QVBoxLayout()
+        title_layout.setSpacing(0)
+        title_label = QLabel("MiFlashX")
+        title_label.setStyleSheet("font-size: 20px; font-weight: 700;")
+        subtitle_label = QLabel("Xiaomi Fastboot Flashing Tool")
+        subtitle_label.setStyleSheet("font-size: 12px;")
+        self._muted_labels.append((subtitle_label, "font-size: 12px;"))
+        title_layout.addWidget(title_label)
+        title_layout.addWidget(subtitle_label)
+        header_layout.addLayout(title_layout)
+        header_layout.addStretch(1)
+
+        main_layout.addLayout(header_layout)
+
         # --- System Status & Device Info Group ---
-        status_group = QGroupBox("System Status & Device Info")
+        status_group = QGroupBox("🖥️  System Status && Device Info")
         status_group.setObjectName("card")
         status_layout = QVBoxLayout(status_group)
-        status_layout.setSpacing(8)
+        status_layout.setSpacing(10)
 
-        self.adb_fastboot_status_label = QLabel("ADB/Fastboot: Checking...")
-        self.udev_status_label = QLabel("Udev Rules (Linux): Checking...")
-        self.adbusers_status_label = QLabel("User in 'adbusers' group: Checking...")
-        self.device_status_label = QLabel("Device: Not connected")
-        self.device_info_label = QLabel("Info: N/A")
+        self.adb_fastboot_status_label = QLabel("🔄 ADB/Fastboot: Checking...")
+        self.udev_status_label = QLabel("🔄 Udev Rules (Linux): Checking...")
+        self.adbusers_status_label = QLabel("🔄 User in 'adbusers' group: Checking...")
+        self.device_status_label = QLabel("🔌 Device: Not connected")
+        self.device_info_label = QLabel("ℹ️ Info: N/A")
 
         status_layout.addWidget(self.adb_fastboot_status_label)
         status_layout.addWidget(self.udev_status_label)
@@ -259,12 +327,12 @@ class MiFlashX(QMainWindow):
         status_layout.addWidget(self.device_info_label)
 
         linux_buttons_layout = QHBoxLayout()
-        self.install_udev_button = QPushButton("Fix Udev Rules (Linux)")
+        self.install_udev_button = QPushButton("🔧 Fix Udev Rules (Linux)")
         self.install_udev_button.clicked.connect(self.install_udev_rules_action)
         self.install_udev_button.setEnabled(False)
         linux_buttons_layout.addWidget(self.install_udev_button)
 
-        self.add_adbusers_button = QPushButton("Add User to 'adbusers' group (Linux)")
+        self.add_adbusers_button = QPushButton("👤 Add User to 'adbusers' group (Linux)")
         self.add_adbusers_button.clicked.connect(self.add_to_adbusers_group_action)
         self.add_adbusers_button.setEnabled(False)
         linux_buttons_layout.addWidget(self.add_adbusers_button)
@@ -276,7 +344,7 @@ class MiFlashX(QMainWindow):
         main_layout.addWidget(status_group)
 
         # --- ROM Selection Section ---
-        rom_selection_group = QGroupBox("ROM Selection & Extraction")
+        rom_selection_group = QGroupBox("📦  ROM Selection && Extraction")
         rom_selection_group.setObjectName("card")
         rom_selection_layout = QVBoxLayout(rom_selection_group)
         rom_selection_layout.setSpacing(10)
@@ -285,45 +353,74 @@ class MiFlashX(QMainWindow):
         self.rom_path_input = QLineEdit()
         self.rom_path_input.setPlaceholderText("Select Fastboot ROM (.tgz)")
         self.rom_path_input.setReadOnly(True)
-        self.browse_rom_button = QPushButton("Browse")
+        self.browse_rom_button = QPushButton("📁 Browse")
         self.browse_rom_button.clicked.connect(self.browse_rom)
         rom_path_layout.addWidget(self.rom_path_input)
         rom_path_layout.addWidget(self.browse_rom_button)
         rom_selection_layout.addLayout(rom_path_layout)
 
-        self.extract_rom_button = QPushButton("Extract ROM")
+        self.extract_rom_button = QPushButton("📦 Extract ROM")
         self.extract_rom_button.clicked.connect(self.extract_rom)
         self.extract_rom_button.setEnabled(False)
         rom_selection_layout.addWidget(self.extract_rom_button)
 
         or_label = QLabel("— or, if you've already extracted this ROM before —")
-        or_label.setStyleSheet("color: palette(mid);")
+        self._muted_labels.append((or_label, ""))
         rom_selection_layout.addWidget(or_label)
 
-        self.use_extracted_folder_button = QPushButton("Use Already-Extracted ROM Folder…")
+        self.use_extracted_folder_button = QPushButton("📂 Use Already-Extracted ROM Folder…")
         self.use_extracted_folder_button.clicked.connect(self.browse_extracted_folder)
         rom_selection_layout.addWidget(self.use_extracted_folder_button)
 
-        self.extracted_path_label = QLabel("Extracted ROM: None")
+        self.extracted_path_label = QLabel("📭 Extracted ROM: None")
         rom_selection_layout.addWidget(self.extracted_path_label)
 
         main_layout.addWidget(rom_selection_group)
 
         # --- Flashing Options Section ---
-        flashing_group = QGroupBox("Flashing Options")
+        flashing_group = QGroupBox("⚡  Flashing Options")
         flashing_group.setObjectName("card")
         flashing_layout = QVBoxLayout(flashing_group)
         flashing_layout.setSpacing(10)
 
         flashing_layout.addWidget(QLabel("Select Flashing Mode:"))
-        self.flash_mode_combo = QComboBox()
-        self.flash_mode_combo.addItem("Flash all (clean install, wipe all data)", FlashModes.CLEAN_ALL)
-        self.flash_mode_combo.addItem("Flash all except storage (keep user data)", FlashModes.SAVE_USER_DATA)
-        self.flash_mode_combo.addItem("Flash all except data and storage (safest for updates, keeps apps and data)", FlashModes.SAVE_DATA_AND_STORAGE)
-        self.flash_mode_combo.addItem("Flash all and lock bootloader (use with caution!)", FlashModes.LOCK_BOOTLOADER)
-        flashing_layout.addWidget(self.flash_mode_combo)
 
-        self.flash_button = QPushButton("Start Flashing")
+        # Mode picker as selectable cards rather than a plain dropdown — for
+        # a choice this consequential (one option wipes the whole device),
+        # seeing all the trade-offs at once beats hiding them behind a
+        # collapsed combo box. Also fixes a real UX/safety issue in the old
+        # combo: its first (and therefore pre-selected) item was the
+        # destructive "wipe all data" option. The safest option is now both
+        # first and the default selection.
+        self._flash_mode_group = QButtonGroup(self)
+        self._flash_mode_group.setExclusive(True)
+        self._flash_mode_radios = {}
+
+        for mode_value, title, description, risk in _FLASH_MODE_INFO:
+            option_frame = QFrame()
+            option_frame.setObjectName("modeOption")
+            option_frame.setProperty("risk", risk)
+            option_layout = QVBoxLayout(option_frame)
+            option_layout.setSpacing(2)
+            option_layout.setContentsMargins(10, 8, 10, 8)
+
+            radio = QRadioButton(f"{_STATUS_ICONS.get(risk, '')} {title}")
+            radio.setStyleSheet("font-weight: 600;")
+            desc_label = QLabel(description)
+            desc_label.setWordWrap(True)
+            self._muted_labels.append((desc_label, "font-size: 11px; margin-left: 22px;"))
+
+            option_layout.addWidget(radio)
+            option_layout.addWidget(desc_label)
+
+            self._flash_mode_group.addButton(radio)
+            self._flash_mode_radios[mode_value] = radio
+            flashing_layout.addWidget(option_frame)
+
+        # Default to the safest option, not the first-added one blindly.
+        self._flash_mode_radios[FlashModes.SAVE_DATA_AND_STORAGE].setChecked(True)
+
+        self.flash_button = QPushButton("⚡ Start Flashing")
         self.flash_button.clicked.connect(self.start_flashing_confirmation)
         self.flash_button.setEnabled(False)
         flashing_layout.addWidget(self.flash_button)
@@ -331,7 +428,7 @@ class MiFlashX(QMainWindow):
         main_layout.addWidget(flashing_group)
 
         # --- Progress & Log Section ---
-        log_group = QGroupBox("Log Output")
+        log_group = QGroupBox("📜  Log Output")
         log_group.setObjectName("card")
         log_layout = QVBoxLayout(log_group)
         self.log_output = QTextEdit()
@@ -371,6 +468,21 @@ class MiFlashX(QMainWindow):
         self._progress_anim.setEndValue(value)
         self._progress_anim.start()
 
+    def get_selected_flash_mode(self):
+        """Returns the FlashModes value of whichever mode card is checked."""
+        for mode_value, radio in self._flash_mode_radios.items():
+            if radio.isChecked():
+                return mode_value
+        return None  # shouldn't happen -- one is always checked by default
+
+    def get_selected_flash_mode_title(self):
+        """Display title for the currently selected mode, for dialog text."""
+        selected = self.get_selected_flash_mode()
+        for mode_value, title, _description, _risk in _FLASH_MODE_INFO:
+            if mode_value == selected:
+                return title
+        return "Unknown mode"
+
     def apply_card_theme(self):
         """
         Builds a stylesheet from the CURRENT application palette (not
@@ -405,6 +517,27 @@ class MiFlashX(QMainWindow):
         accent_hover = accent.lighter(115).name()
         accent_pressed = accent.darker(110).name()
 
+        # Muted/secondary text (subtitle, "— or —" divider, flash-mode
+        # descriptions) needs a color that reads as "subdued" while staying
+        # legible against the card background in BOTH themes. Bug this
+        # replaces: these labels used to set "color: palette(mid)" directly,
+        # but Mid is meant as a border/separator tone — in the dark palette
+        # it's deliberately darker than the window color for that purpose,
+        # which made text using it nearly invisible against a dark card.
+        # Blending 55% toward the full-contrast text color (rather than
+        # reusing a role designed for a different job) gives a muted tone
+        # that scales correctly whether the theme is light, dark, or a
+        # future accent scheme neither of us has tested against.
+        def _blend(c1: QColor, c2: QColor, t: float) -> QColor:
+            return QColor(
+                int(c1.red() * t + c2.red() * (1 - t)),
+                int(c1.green() * t + c2.green() * (1 - t)),
+                int(c1.blue() * t + c2.blue() * (1 - t)),
+            )
+        muted_text = _blend(text, window, 0.55)
+        for label, extra_css in self._muted_labels:
+            label.setStyleSheet(f"color: {muted_text.name()}; {extra_css}")
+
         self.setStyleSheet(f"""
             QWidget#centralArea {{
                 background-color: {window.name()};
@@ -417,6 +550,7 @@ class MiFlashX(QMainWindow):
                 margin-top: 14px;
                 padding: 14px 10px 10px 10px;
                 font-weight: 600;
+                font-size: 13px;
             }}
             QGroupBox#card::title {{
                 subcontrol-origin: margin;
@@ -446,6 +580,8 @@ class MiFlashX(QMainWindow):
                 color: {pal.color(pal.ColorRole.HighlightedText).name()};
                 border: none;
                 font-weight: 600;
+                font-size: 14px;
+                padding: 10px 14px;
             }}
             QPushButton#primaryButton:hover:!disabled {{
                 background-color: {accent_hover};
@@ -551,7 +687,7 @@ class MiFlashX(QMainWindow):
 
         self.adb_path, self.fastboot_path = find_adb_fastboot()
         if self.adb_path and self.fastboot_path:
-            self.adb_fastboot_status_label.setText("ADB/Fastboot: <font color='green'>Found</font>")
+            self.adb_fastboot_status_label.setText("✅ ADB/Fastboot: <font color='green'>Found</font>")
             self.flashing_core = FlashingCore(
                 adb_path=self.adb_path,
                 fastboot_path=self.fastboot_path,
@@ -560,38 +696,38 @@ class MiFlashX(QMainWindow):
             self.append_log(f"[INFO] ADB: {self.adb_path}, Fastboot: {self.fastboot_path}")
             self.extract_rom_button.setEnabled(True)
         else:
-            self.adb_fastboot_status_label.setText("ADB/Fastboot: <font color='red'>Not Found</font>. Please ensure Android SDK Platform Tools are installed and accessible.")
+            self.adb_fastboot_status_label.setText("❌ ADB/Fastboot: <font color='red'>Not Found</font>. Please ensure Android SDK Platform Tools are installed and accessible.")
             self.append_log('[ERROR] ADB/Fastboot not found. Cannot proceed without them. Ensure they are in your system PATH or correctly bundled.')
             self.flash_button.setEnabled(False)
             self.extract_rom_button.setEnabled(False)
             self.use_extracted_folder_button.setEnabled(False)
-            self.device_status_label.setText("Device: <font color='red'>N/A (Tools Missing)</font>")
-            self.device_info_label.setText("Info: N/A")
-            self.udev_status_label.setText("Udev Rules (Linux): N/A (Tools Missing)")
-            self.adbusers_status_label.setText("User in 'adbusers' group: N/A (Tools Missing)")
+            self.device_status_label.setText("⚪ Device: <font color='red'>N/A (Tools Missing)</font>")
+            self.device_info_label.setText("ℹ️ Info: N/A")
+            self.udev_status_label.setText("⚪ Udev Rules (Linux): N/A (Tools Missing)")
+            self.adbusers_status_label.setText("⚪ User in 'adbusers' group: N/A (Tools Missing)")
             self.linux_buttons_widget.setVisible(False)
             return
 
         if get_os() == "linux":
             udev_ok, udev_msg = check_udev_rules()
             if udev_ok:
-                self.udev_status_label.setText(f"Udev Rules (Linux): <font color='green'>{udev_msg}</font>")
+                self.udev_status_label.setText(f"✅ Udev Rules (Linux): <font color='green'>{udev_msg}</font>")
                 self.install_udev_button.setEnabled(False)
             else:
-                self.udev_status_label.setText(f"Udev Rules (Linux): <font color='red'>{udev_msg}</font>")
+                self.udev_status_label.setText(f"⚠️ Udev Rules (Linux): <font color='red'>{udev_msg}</font>")
                 self.install_udev_button.setEnabled(True)
                 self.append_log('[WARNING] Udev rules might be missing or incorrect for Xiaomi/Android devices. This can cause \'no permissions\' errors with Fastboot.')
                 self.append_log('[INFO] Click \'Fix Udev Rules\' if you encounter device detection/permission issues.')
 
             adbusers_ok = self._adbusers_ok()
-            self.adbusers_status_label.setText("User in 'adbusers' group: <font color='green'>Yes</font>" if adbusers_ok else "User in 'adbusers' group: <font color='red'>No</font>")
+            self.adbusers_status_label.setText("✅ User in 'adbusers' group: <font color='green'>Yes</font>" if adbusers_ok else "⚠️ User in 'adbusers' group: <font color='red'>No</font>")
             self.add_adbusers_button.setEnabled(not adbusers_ok)
             if not adbusers_ok:
                 self.append_log('[WARNING] Your user is not in the \'adbusers\' group. This can cause permission issues. Click \'Add User to adbusers group\'.')
                 self.append_log('[INFO] Remember to log out and back in after adding user to group for changes to take effect.')
         else:
-            self.udev_status_label.setText("Udev Rules (Linux): N/A (Not Linux)")
-            self.adbusers_status_label.setText("User in 'adbusers' group: N/A (Not Linux)")
+            self.udev_status_label.setText("⚪ Udev Rules (Linux): N/A (Not Linux)")
+            self.adbusers_status_label.setText("⚪ User in 'adbusers' group: N/A (Not Linux)")
             self.linux_buttons_widget.setVisible(False)
 
         self.append_log('[INFO] Initial setup checks complete. Waiting for device connection...')
@@ -606,13 +742,13 @@ class MiFlashX(QMainWindow):
         background thread — never here on the GUI thread.
         """
         if state.mode == "timeout":
-            self.device_status_label.setText("Device: <font color='orange'>Fastboot not responding (timed out)</font>")
+            self.device_status_label.setText("⚠️ Device: <font color='orange'>Fastboot not responding (timed out)</font>")
             self.append_log('[WARNING] fastboot devices timed out. The device or USB port may be in a bad state — try replugging.')
             return
 
         if state.connected and state.serial != self.current_serial:
             self.current_serial = state.serial
-            self.device_status_label.setText(f"Device: <font color='green'>Connected ({state.serial})</font>")
+            self.device_status_label.setText(f"✅ Device: <font color='green'>Connected ({state.serial})</font>")
             self._pulse_label(self.device_status_label)
             self.append_log(f'[INFO] Device connected: {state.serial}')
 
@@ -625,16 +761,16 @@ class MiFlashX(QMainWindow):
             self.current_serial = None
             self.current_device_codename = "Unknown"
             self.current_bootloader_status = "Unknown"
-            self.device_status_label.setText("Device: <font color='red'>Disconnected</font>")
+            self.device_status_label.setText("🔌 Device: <font color='red'>Disconnected</font>")
             self._pulse_label(self.device_status_label)
-            self.device_info_label.setText("Info: N/A")
+            self.device_info_label.setText("ℹ️ Info: N/A")
             self.flash_button.setEnabled(False)
             self.append_log('[INFO] Device disconnected.')
 
     def _on_device_info_ready(self, info: dict):
         self.current_device_codename = info.get('codename', 'Unknown')
         self.current_bootloader_status = info.get('bootloader_locked', 'Unknown')
-        self.device_info_label.setText(f"Info: Codename: {self.current_device_codename}, Bootloader: {self.current_bootloader_status}")
+        self.device_info_label.setText(f"ℹ️ Info: Codename: {self.current_device_codename}, Bootloader: {self.current_bootloader_status}")
         self.append_log(f'[INFO] Device info: Codename: {self.current_device_codename}, Bootloader: {self.current_bootloader_status}')
 
         self.flash_button.setEnabled(self.extracted_rom_path is not None and self.current_bootloader_status == "Unlocked")
@@ -651,7 +787,7 @@ class MiFlashX(QMainWindow):
             self.rom_path_input.setText(selected_file)
             self.extracted_rom_path = None
             self._archive_selected = True
-            self.extracted_path_label.setText("Extracted ROM: None (Click 'Extract ROM')")
+            self.extracted_path_label.setText("📭 Extracted ROM: None (Click 'Extract ROM')")
             self.extract_rom_button.setEnabled(True)
             self.flash_button.setEnabled(False)
 
@@ -685,7 +821,7 @@ class MiFlashX(QMainWindow):
         self.rom_path_input.setText("(using pre-extracted folder — no archive selected)")
         self.extract_rom_button.setEnabled(False)
         self.extracted_path_label.setText(
-            f"Extracted ROM: <font color='green'>{os.path.basename(resolved_path)} (existing folder)</font>"
+            f"✅ Extracted ROM: <font color='green'>{os.path.basename(resolved_path)} (existing folder)</font>"
         )
         self.append_log(f"[INFO] Using already-extracted ROM folder: {resolved_path}")
 
@@ -717,7 +853,7 @@ class MiFlashX(QMainWindow):
             self.progress_bar.setFormat("Extraction: %p%")
             if success:
                 self.extracted_rom_path = message
-                self.extracted_path_label.setText(f"Extracted ROM: <font color='green'>{os.path.basename(self.extracted_rom_path)}</font>")
+                self.extracted_path_label.setText(f"✅ Extracted ROM: <font color='green'>{os.path.basename(self.extracted_rom_path)}</font>")
                 QMessageBox.information(self, "Extraction Complete", "ROM extracted successfully!")
                 self.statusBar.showMessage("ROM extracted. Ready to flash.")
                 self.flash_button.setEnabled(self.current_serial is not None and self.current_bootloader_status == "Unlocked")
@@ -725,7 +861,7 @@ class MiFlashX(QMainWindow):
                     self.append_log('[WARNING] Flashing button remains disabled. Ensure a device is connected in Fastboot mode and its bootloader is unlocked.')
             else:
                 self.extracted_rom_path = None
-                self.extracted_path_label.setText("Extracted ROM: <font color='red'>Failed</font>")
+                self.extracted_path_label.setText("❌ Extracted ROM: <font color='red'>Failed</font>")
                 QMessageBox.critical(self, "Extraction Failed", message)
                 self.statusBar.showMessage("ROM extraction failed.")
 
