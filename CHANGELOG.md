@@ -32,6 +32,14 @@ overhaul, in the order the work actually happened.
   extra padding so it stands out from secondary buttons.
 - Slightly larger card titles and more spacing between status rows, for
   stronger visual hierarchy.
+- **Two-column layout with a scrolling page.** The single stack of four cards
+  needed ~1250px of height (minimum hint 1116px), taller than most laptop
+  screens, so the bottom half of the window was cut off. Setup (status, ROM
+  selection) now sits on the left and flashing options plus the log on the
+  right, and the whole page lives in a scroll area so it can never force the
+  window taller than the display. The initial window size is derived from the
+  screen's available area instead of a fixed 900x700. Long status lines now
+  wrap instead of stretching the column.
 
 ### Fixed
 - **Near-invisible secondary text in dark mode.** The header subtitle, the
@@ -43,6 +51,22 @@ overhaul, in the order the work actually happened.
   blending the live text and window colors, and applies it to all such
   labels centrally, so it re-applies correctly on every theme switch.
   Verified by rendering both themes before and after.
+- **Crash on Extract ROM and Start Flashing.** When the flashing-mode dropdown
+  was replaced by selectable options, four call sites still referenced the
+  removed `flash_mode_combo` (in `set_ui_enabled`, `start_flashing_confirmation`
+  and `start_flashing`), raising `AttributeError` as soon as either button was
+  used. They now use `get_selected_flash_mode()` /
+  `get_selected_flash_mode_title()`, and `set_ui_enabled()` enables and
+  disables the radio options. Verified end to end with a stubbed flasher:
+  each of the four modes reaches `flash_rom()` unchanged.
+- **Stray underscores in "keep apps _data" and "Flash _lock bootloader".** In a
+  `QRadioButton`, `&` marks a keyboard mnemonic, so the `&` in those titles was
+  swallowed and the next letter underlined. The ampersand is now escaped.
+- **Invisible unselected radio circles and unreadable disabled buttons in dark
+  mode.** Both drew from the `Mid` colour, which the dark palette makes darker
+  than the card behind it. Radio indicators are now drawn explicitly (muted
+  ring, accent-coloured dot when selected) and disabled button text uses a
+  colour blended from the live text and window colours.
 
 ## [Unreleased] — Security audit
 

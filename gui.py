@@ -7,7 +7,7 @@ import subprocess
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QLineEdit, QLabel,
                              QTextEdit, QFileDialog, QGroupBox, QFrame,
-                             QRadioButton, QButtonGroup,
+                             QRadioButton, QButtonGroup, QScrollArea,
                              QMessageBox, QProgressBar, QSizePolicy, QSpacerItem,
                              QStatusBar, QGraphicsDropShadowEffect, QGraphicsOpacityEffect)
 from PyQt6.QtCore import QThread, pyqtSignal, QPropertyAnimation, QEasingCurve, QByteArray, QSettings, Qt
@@ -158,7 +158,16 @@ class MiFlashX(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("MiFlashX (Xiaomi Fastboot Flashing Tool for Linux)")
-        self.setGeometry(100, 100, 900, 700)
+        # Size to the screen rather than a fixed number: the content is tall
+        # enough that a fixed size (or the layout's own minimum) can exceed a
+        # laptop screen, pushing the bottom of the window off-screen.
+        screen = QApplication.primaryScreen()
+        if screen is not None:
+            avail = screen.availableGeometry()
+            self.resize(min(1100, int(avail.width() * 0.9)),
+                        min(800, int(avail.height() * 0.9)))
+        else:
+            self.resize(1100, 800)
 
         # Prefer the user's icon theme; fall back to the bundled icon only if
         # the desktop environment has no "phone" icon of its own.
@@ -262,9 +271,16 @@ class MiFlashX(QMainWindow):
 
     def init_ui(self):
         """Initializes the main graphical user interface elements."""
+        # The page lives inside a scroll area: if the window is ever shorter
+        # than the content (small screen, tiled window), it scrolls instead of
+        # forcing the window taller than the display and cutting off the bottom.
         central_widget = QWidget()
         central_widget.setObjectName("centralArea")
-        self.setCentralWidget(central_widget)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidget(central_widget)
+        self.setCentralWidget(scroll)
         main_layout = QVBoxLayout(central_widget)
         main_layout.setSpacing(18)
         main_layout.setContentsMargins(18, 18, 18, 18)
@@ -308,6 +324,18 @@ class MiFlashX(QMainWindow):
 
         main_layout.addLayout(header_layout)
 
+        # Two columns instead of one tall stack. Windows are wider than they
+        # are tall, and a single column of four cards needs ~1250px of height.
+        columns = QHBoxLayout()
+        columns.setSpacing(18)
+        left_col = QVBoxLayout()
+        left_col.setSpacing(18)
+        right_col = QVBoxLayout()
+        right_col.setSpacing(18)
+        columns.addLayout(left_col, 1)
+        columns.addLayout(right_col, 1)
+        main_layout.addLayout(columns, 1)
+
         # --- System Status & Device Info Group ---
         status_group = QGroupBox("🖥️  System Status && Device Info")
         status_group.setObjectName("card")
@@ -325,6 +353,10 @@ class MiFlashX(QMainWindow):
         status_layout.addWidget(self.adbusers_status_label)
         status_layout.addWidget(self.device_status_label)
         status_layout.addWidget(self.device_info_label)
+        for _lbl in (self.adb_fastboot_status_label, self.udev_status_label,
+                     self.adbusers_status_label, self.device_status_label,
+                     self.device_info_label):
+            _lbl.setWordWrap(True)
 
         linux_buttons_layout = QHBoxLayout()
         self.install_udev_button = QPushButton("🔧 Fix Udev Rules (Linux)")
@@ -341,7 +373,7 @@ class MiFlashX(QMainWindow):
         self.linux_buttons_widget.setLayout(linux_buttons_layout)
         status_layout.addWidget(self.linux_buttons_widget)
 
-        main_layout.addWidget(status_group)
+        left_col.addWidget(status_group)
 
         # --- ROM Selection Section ---
         rom_selection_group = QGroupBox("📦  ROM Selection && Extraction")
@@ -375,13 +407,14 @@ class MiFlashX(QMainWindow):
         self.extracted_path_label = QLabel("📭 Extracted ROM: None")
         rom_selection_layout.addWidget(self.extracted_path_label)
 
-        main_layout.addWidget(rom_selection_group)
+        left_col.addWidget(rom_selection_group)
+        left_col.addStretch(1)
 
         # --- Flashing Options Section ---
         flashing_group = QGroupBox("⚡  Flashing Options")
         flashing_group.setObjectName("card")
         flashing_layout = QVBoxLayout(flashing_group)
-        flashing_layout.setSpacing(10)
+        flashing_layout.setSpacing(6)
 
         flashing_layout.addWidget(QLabel("Select Flashing Mode:"))
 
@@ -402,9 +435,9 @@ class MiFlashX(QMainWindow):
             option_frame.setProperty("risk", risk)
             option_layout = QVBoxLayout(option_frame)
             option_layout.setSpacing(2)
-            option_layout.setContentsMargins(10, 8, 10, 8)
+            option_layout.setContentsMargins(10, 4, 10, 4)
 
-            radio = QRadioButton(f"{_STATUS_ICONS.get(risk, '')} {title}")
+            radio = QRadioButton(f"{_STATUS_ICONS.get(risk, '')} {title.replace('&', '&&')}")
             radio.setStyleSheet("font-weight: 600;")
             desc_label = QLabel(description)
             desc_label.setWordWrap(True)
@@ -425,7 +458,7 @@ class MiFlashX(QMainWindow):
         self.flash_button.setEnabled(False)
         flashing_layout.addWidget(self.flash_button)
 
-        main_layout.addWidget(flashing_group)
+        right_col.addWidget(flashing_group)
 
         # --- Progress & Log Section ---
         log_group = QGroupBox("📜  Log Output")
@@ -433,9 +466,10 @@ class MiFlashX(QMainWindow):
         log_layout = QVBoxLayout(log_group)
         self.log_output = QTextEdit()
         self.log_output.setReadOnly(True)
+        self.log_output.setMinimumHeight(100)
         self.log_output.setFont(QFont("monospace", 9))
         log_layout.addWidget(self.log_output)
-        main_layout.addWidget(log_group, 1)
+        right_col.addWidget(log_group, 1)
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setValue(0)
@@ -443,7 +477,6 @@ class MiFlashX(QMainWindow):
         self.progress_bar.setFormat("Operation Progress: %p%")
         main_layout.addWidget(self.progress_bar)
 
-        main_layout.addSpacerItem(QSpacerItem(20, 10, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding))
 
         self.statusBar = QStatusBar()
         self.setStatusBar(self.statusBar)
@@ -535,6 +568,10 @@ class MiFlashX(QMainWindow):
                 int(c1.blue() * t + c2.blue() * (1 - t)),
             )
         muted_text = _blend(text, window, 0.55)
+        # Disabled controls should look dimmed but stay readable. They used
+        # `mid` (a border tone, darker than the window in the dark palette),
+        # which turned disabled button labels into unreadable dark bars.
+        disabled_text = _blend(text, window, 0.45)
         for label, extra_css in self._muted_labels:
             label.setStyleSheet(f"color: {muted_text.name()}; {extra_css}")
 
@@ -572,7 +609,30 @@ class MiFlashX(QMainWindow):
                 background-color: {mid.lighter(115).name()};
             }}
             QPushButton:disabled {{
-                color: {mid.name()};
+                color: {disabled_text.name()};
+            }}
+
+            /* Native radio indicators are drawn from Window.darker(), which is
+               near-black on a dark card, so unselected options were invisible.
+               Draw them explicitly from the live palette instead. */
+            QRadioButton::indicator {{
+                width: 10px;
+                height: 10px;
+                border-radius: 7px;
+                border: 2px solid {muted_text.name()};
+                background-color: {card_bg.name()};
+            }}
+            QRadioButton::indicator:hover {{
+                border-color: {accent.name()};
+            }}
+            QRadioButton::indicator:checked {{
+                border-color: {accent.name()};
+                background-color: qradialgradient(cx:0.5, cy:0.5, radius:0.5, fx:0.5, fy:0.5,
+                    stop:0 {accent.name()}, stop:0.5 {accent.name()},
+                    stop:0.6 {card_bg.name()}, stop:1 {card_bg.name()});
+            }}
+            QRadioButton::indicator:disabled {{
+                border-color: {disabled_text.name()};
             }}
 
             QPushButton#primaryButton:!disabled {{
@@ -882,8 +942,8 @@ class MiFlashX(QMainWindow):
             QMessageBox.critical(self, "Bootloader Locked", "Your device's bootloader is locked. Flashing a Fastboot ROM requires an unlocked bootloader. Please unlock it officially first (using Xiaomi's Mi Unlock Tool).")
             return
 
-        selected_mode_text = self.flash_mode_combo.currentText()
-        flash_mode_data = self.flash_mode_combo.currentData()
+        selected_mode_text = self.get_selected_flash_mode_title()
+        flash_mode_data = self.get_selected_flash_mode()
 
         confirmation_msg = f"You are about to flash the ROM using '{selected_mode_text}' mode to device '{self.current_serial}' (Codename: {self.current_device_codename}).\n\n"
         if flash_mode_data == FlashModes.CLEAN_ALL:
@@ -908,7 +968,7 @@ class MiFlashX(QMainWindow):
             self.append_log('[INFO] Flashing cancelled by user.')
 
     def start_flashing(self):
-        flash_mode = self.flash_mode_combo.currentData()
+        flash_mode = self.get_selected_flash_mode()
 
         self.progress_bar.setValue(0)
         self.progress_bar.setFormat("Flashing: %p%")
@@ -938,7 +998,8 @@ class MiFlashX(QMainWindow):
         self.browse_rom_button.setEnabled(enabled)
         self.extract_rom_button.setEnabled(enabled and self._archive_selected)
         self.use_extracted_folder_button.setEnabled(enabled)
-        self.flash_mode_combo.setEnabled(enabled)
+        for _radio in self._flash_mode_radios.values():
+            _radio.setEnabled(enabled)
 
         self.flash_button.setEnabled(enabled and self.extracted_rom_path is not None and
                                      self.current_serial is not None and self.current_bootloader_status == "Unlocked")
