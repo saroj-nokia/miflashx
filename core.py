@@ -10,7 +10,6 @@ from command_runner import run_command
 
 class FlashModes:
     CLEAN_ALL = "clean_all"
-    SAVE_USER_DATA = "except_storage"
     LOCK_BOOTLOADER = "flash_all_lock"
     SAVE_DATA_AND_STORAGE = "except_data_storage"
 
@@ -109,13 +108,16 @@ _KNOWN_FLASH_SCRIPT_NAMES = ["flash_all.sh", "flash_all_except_data_storage.sh",
 
 # Which script(s) each mode may run, in order of preference. Xiaomi ships the
 # "keep my data" script under two names depending on ROM generation: older
-# ROMs (e.g. Mi A3, Redmi 6) use flash_all_except_data_storage, while current
-# MIUI/HyperOS packages use flash_all_except_storage. A ROM only contains one
-# of them, so each keep-data mode accepts either — otherwise it would fail with
-# "script not found" on whichever generation it did not hard-code.
+# ROMs (e.g. Mi A3, Redmi 6) use flash_all_except_data_storage, while some
+# packages use flash_all_except_storage instead. A single ROM only ever
+# contains one of the two -- confirmed against a real ROM's shipped scripts,
+# which is also why there is only one "keep data" mode here, not two: an
+# earlier version of this app had SAVE_USER_DATA and SAVE_DATA_AND_STORAGE as
+# separate UI choices, but both resolved to this identical candidate list,
+# so choosing either always ran the exact same script. That was a false
+# choice, not two real options, and has been collapsed into this one mode.
 _MODE_SCRIPT_CANDIDATES = {
     FlashModes.CLEAN_ALL: ["flash_all"],
-    FlashModes.SAVE_USER_DATA: ["flash_all_except_storage", "flash_all_except_data_storage"],
     FlashModes.SAVE_DATA_AND_STORAGE: ["flash_all_except_data_storage", "flash_all_except_storage"],
     FlashModes.LOCK_BOOTLOADER: ["flash_all_lock"],
 }
@@ -439,11 +441,19 @@ class FlashingCore:
         return False, (f"Error: none of the expected flashing scripts ({tried}) were found in "
                        f"'{images_dir}' or '{root}'. This ROM may not support the selected mode.")
 
-    def flash_rom(self, extracted_rom_path, flash_mode):
+    def flash_rom(self, extracted_rom_path, flash_mode, serial=None):
         """
         Orchestrates the device flashing process. Runs the flash script through
         command_runner instead of the old blocking Popen loop, with a generous
         timeout since flashing genuinely takes minutes.
+
+        `serial` is passed through to the script as `-s <serial>`, which every
+        `fastboot $*` call inside it then inherits. Confirmed by inspecting
+        Xiaomi's actual shipped scripts: every fastboot invocation in them is
+        `fastboot $* <command>`, so without this, `$*` is empty and every call
+        targets whichever fastboot device happens to be first/only -- fine
+        with one device connected, silently wrong or ambiguous with two.
+
         Returns (True, message) on success, (False, error_message) on failure.
         """
         self._emit_status(f"Starting device flashing process with mode: {flash_mode}...")
@@ -464,14 +474,44 @@ class FlashingCore:
                 log_message('warning', f"Failed to chmod {flash_script_path}: {e}")
 
         script_cwd = os.path.dirname(flash_script_path)
+        serial_args = ["-s", serial] if serial else []
+
+        # Xiaomi's own flash_all*.sh/.bat files are shipped with NO shebang
+        # line (confirmed against the actual files from a real ROM) -- every
+        # fastboot call in them is written as `fastboot $* <cmd>`, meant to be
+        # sourced/run by a shell, not executed as a standalone binary.
+        # subprocess's execve() has no shell-fallback for a missing shebang
+        # (unlike glibc's execvp()/a login shell): running the script path
+        # directly raises "OSError: [Errno 8] Exec format error" immediately,
+        # before a single fastboot command ever runs. Confirmed by running the
+        # unmodified script both ways. The fix is to invoke the interpreter
+        # explicitly rather than the script path.
+        if self.current_os in ("linux", "darwin"):
+            command = ["sh", flash_script_path] + serial_args
+        else:
+            command = [flash_script_path] + serial_args
 
         # Flashing genuinely takes several minutes — a long timeout here is
         # intentional, unlike the short ones used for detection/status checks.
-        result = self._run([flash_script_path], cwd=script_cwd, timeout=900.0)
+        result = self._run(command, cwd=script_cwd, timeout=900.0)
 
         if result.ok:
             return True, "Flashing process completed."
         elif result.timed_out:
             return False, "Flashing timed out after 15 minutes. Check the device and logs before retrying."
-        else:
-            return False, "Flashing process failed. Check logs for details."
+
+        # These two are checks the script performs on itself before touching
+        # the device (see the top of every flash_all*.sh) and are common
+        # enough, with a clear enough cause, to surface specifically instead
+        # of a generic failure message.
+        output = result.output
+        if "Missmatching image and device" in output:
+            return False, ("This ROM is for a different device model than the one connected. "
+                           "Double-check you downloaded the Fastboot ROM for your exact device "
+                           "and variant.")
+        if "antirollback version is greater" in output:
+            return False, ("This device's anti-rollback version is newer than what this ROM "
+                           "supports. The bootloader blocks flashing an older anti-rollback "
+                           "version as an anti-downgrade protection — this specific ROM cannot "
+                           "be flashed on this device.")
+        return False, "Flashing process failed. Check logs for details."

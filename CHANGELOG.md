@@ -5,6 +5,43 @@ All notable changes to MiFlashX are documented here. Format loosely follows
 a formal release yet — everything below is grouped as one in-progress
 overhaul, in the order the work actually happened.
 
+## [Unreleased] — Fixes found by testing against real Xiaomi ROM scripts
+
+The user provided the actual, unmodified `flash_all.sh`, `flash_all_except_data_storage.sh`, and `flash_all_lock.sh` from a real sapphire ROM. Running them through the app's actual code (not synthetic test scripts) surfaced one blocking bug and two correctness issues.
+
+### Fixed
+- **Blocking: the app could not flash any real Xiaomi ROM.** Xiaomi ships
+  every flash script with no shebang line (confirmed on all three real
+  files). `flash_rom()` executed the script path directly via `subprocess`,
+  which has no shell-fallback for a missing shebang the way a login shell
+  does — this raised `OSError: [Errno 8] Exec format error` immediately,
+  before a single `fastboot` command ran, on every real ROM. Reproduced
+  against the actual unmodified script, then fixed by invoking `sh
+  <script>` explicitly instead of the script path alone. Re-verified against
+  the real script end to end: it now runs to completion.
+- **The device serial was never passed to the flashing script.** Every
+  `fastboot` call inside Xiaomi's scripts is written as `fastboot $*
+  <command>` — `$*` expands to whatever arguments the script itself was
+  called with. `flash_rom()` never passed any, so every call was unscoped:
+  harmless with exactly one fastboot device connected, silently wrong or
+  ambiguous with two. `flash_rom()` now takes a `serial` parameter and
+  invokes the script as `sh <script> -s <serial>`; `gui.py` passes
+  `self.current_serial`. Verified against the real script: all 36 fastboot
+  calls it makes now correctly carry `-s <serial>`.
+- **Duplicate flashing mode was a false choice.** "Safest — keep apps &
+  data" and "Keep user data" mapped to the identical script candidate list,
+  just tried in a different order — a ROM only ships one of
+  `flash_all_except_data_storage.sh` / `flash_all_except_storage.sh`, so
+  choosing either option always ran the exact same script. Removed
+  `FlashModes.SAVE_USER_DATA`; three real modes remain (safest/keep-data,
+  clean install, flash & lock), matching the three scripts Xiaomi actually
+  ships.
+- **Generic "Flashing process failed" message replaced with specific
+  detection** of the two named failure conditions every real flash script
+  checks for itself before touching the device: a device/ROM model mismatch
+  and an anti-rollback version block. Both now surface a clear, specific
+  explanation instead of "check logs for details."
+
 ## [Unreleased] — Follow-up audit after the layout rewrite
 
 ### Fixed

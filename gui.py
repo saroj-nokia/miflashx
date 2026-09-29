@@ -29,8 +29,6 @@ _STATUS_ICONS = {"ok": "✅", "bad": "❌", "warn": "⚠️"}
 _FLASH_MODE_INFO = [
     (FlashModes.SAVE_DATA_AND_STORAGE, "Safest — keep apps & data",
      "Recommended for routine updates. Keeps your data and storage intact.", "ok"),
-    (FlashModes.SAVE_USER_DATA, "Keep user data",
-     "Wipes the system partition but preserves your user data.", "warn"),
     (FlashModes.CLEAN_ALL, "Clean install",
      "Wipes ALL data on the device. Make sure you have a backup.", "bad"),
     (FlashModes.LOCK_BOOTLOADER, "Flash & lock bootloader",
@@ -969,8 +967,6 @@ class MiFlashX(QMainWindow):
         ]
         if flash_mode_data == FlashModes.CLEAN_ALL:
             paragraphs.append("<b style='color: red;'>WARNING: This mode will wipe ALL data on your device! Ensure you have a backup.</b>")
-        elif flash_mode_data == FlashModes.SAVE_USER_DATA:
-            paragraphs.append("<b style='color: orange;'>WARNING: This mode keeps user data but wipes the system partition. Proceed with caution.</b>")
         elif flash_mode_data == FlashModes.SAVE_DATA_AND_STORAGE:
             paragraphs.append("<b style='color: green;'>This mode aims to keep your user data and apps. It's generally safer for updates.</b>")
         elif flash_mode_data == FlashModes.LOCK_BOOTLOADER:
@@ -1006,7 +1002,8 @@ class MiFlashX(QMainWindow):
                 self.append_log('[ERROR] Flashing process failed.')
                 self.statusBar.showMessage("Flashing failed.")
 
-        self.worker = Worker(self.flashing_core.flash_rom, extracted_rom_path=self.extracted_rom_path, flash_mode=flash_mode)
+        self.worker = Worker(self.flashing_core.flash_rom, extracted_rom_path=self.extracted_rom_path,
+                             flash_mode=flash_mode, serial=self.current_serial)
         self.worker.finished.connect(on_flash_finished)
         self.worker.progress.connect(self.append_log)
         self.worker.start()
