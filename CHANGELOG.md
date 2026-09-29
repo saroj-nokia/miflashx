@@ -5,6 +5,40 @@ All notable changes to MiFlashX are documented here. Format loosely follows
 a formal release yet — everything below is grouped as one in-progress
 overhaul, in the order the work actually happened.
 
+## [Unreleased] — Follow-up audit after the layout rewrite
+
+### Fixed
+- **Confirmation dialogs showed raw HTML instead of rendering it.**
+  `QMessageBox.question()` only treats its text as rich text if the string
+  *starts* with a tag. Both the flash-mode confirmation and the "Add User to
+  adbusers group" confirmation open with a plain sentence and put
+  `<b style='color: red;'>` warnings further in, so the tags printed
+  literally instead of rendering — confirmed by grabbing the actual dialog.
+  Added `_rich_question()`, which builds the `QMessageBox` directly and
+  forces `Qt.TextFormat.RichText`; both dialogs now use it. Re-rendered both
+  after the fix to confirm the warnings display as styled bold/red text.
+- **`command_runner.run_command()`**: rewrote to stream output line-by-line as
+  the process runs instead of returning everything at once when it finishes,
+  so a multi-minute flash shows progress live rather than dumping output only
+  at the end. Also fixed: on timeout, the whole process group is now killed,
+  not just the direct child — the old version could leave `fastboot` running
+  against the device if a flash script spawned it as a child and only the
+  wrapping script got killed. Verified both with direct timing/process
+  checks, including a control test proving the leak-detection check actually
+  works.
+- **`core.py` flash-mode-to-script mapping was too rigid.** It only ever
+  looked for `flash_all_except_data_storage.sh`, but current MIUI/HyperOS
+  ROMs ship `flash_all_except_storage.sh` instead — a ROM only contains one
+  of the two names, so the "keep data" modes failed outright against roughly
+  half of ROMs in circulation. Added `resolve_flash_script()`, which tries
+  both names per mode and is called before flashing starts, so a ROM missing
+  the needed script is rejected immediately instead of after 15 minutes.
+  Device-query output (`fastboot devices`, `getvar all`) no longer duplicates
+  into the on-screen log now that command output streams live.
+- Removed three unused imports (`sys`, `QSizePolicy`, `QSpacerItem`) left
+  over from the layout rewrite; confirmed clean with `pyflakes` across every
+  module.
+
 ## [Unreleased] — UI modernization
 
 ### Added

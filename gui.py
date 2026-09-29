@@ -1,4 +1,3 @@
-import sys
 import os
 import re
 import inspect
@@ -8,7 +7,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QLineEdit, QLabel,
                              QTextEdit, QFileDialog, QGroupBox, QFrame,
                              QRadioButton, QButtonGroup, QScrollArea,
-                             QMessageBox, QProgressBar, QSizePolicy, QSpacerItem,
+                             QMessageBox, QProgressBar,
                              QStatusBar, QGraphicsDropShadowEffect, QGraphicsOpacityEffect)
 from PyQt6.QtCore import QThread, pyqtSignal, QPropertyAnimation, QEasingCurve, QByteArray, QSettings, Qt
 from PyQt6.QtGui import QIcon, QFont, QColor, QPalette, QAction, QActionGroup, QPixmap
@@ -152,6 +151,25 @@ class DeviceInfoWorker(QThread):
     def run(self):
         info = self.flashing_core.get_device_info(self.serial)
         self.info_ready.emit(info)
+
+
+def _rich_question(parent, title: str, html_lines: list, default_no: bool = True) -> bool:
+    """
+    Yes/No confirmation dialog that actually renders embedded HTML. Plain
+    QMessageBox.question() only treats the text as rich text if it starts
+    with a tag; our messages open with a plain sentence and put <b
+    style='color:...'> further in, which rendered as literal text instead of
+    styled warnings. Building the box directly and forcing
+    Qt.TextFormat.RichText fixes that regardless of where the tags appear.
+    `html_lines` is joined with <br><br> -- each item is one paragraph, so
+    callers don't have to hand-manage line breaks in HTML mode (plain "\n"
+    is collapsed like any other whitespace once textFormat is RichText).
+    """
+    box = QMessageBox(QMessageBox.Icon.Question, title, "<br><br>".join(html_lines), parent=parent)
+    box.setTextFormat(Qt.TextFormat.RichText)
+    box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+    box.setDefaultButton(QMessageBox.StandardButton.No if default_no else QMessageBox.StandardButton.Yes)
+    return box.exec() == QMessageBox.StandardButton.Yes
 
 
 class MiFlashX(QMainWindow):
@@ -945,24 +963,23 @@ class MiFlashX(QMainWindow):
         selected_mode_text = self.get_selected_flash_mode_title()
         flash_mode_data = self.get_selected_flash_mode()
 
-        confirmation_msg = f"You are about to flash the ROM using '{selected_mode_text}' mode to device '{self.current_serial}' (Codename: {self.current_device_codename}).\n\n"
+        paragraphs = [
+            f"You are about to flash the ROM using '{selected_mode_text}' mode to "
+            f"device '{self.current_serial}' (Codename: {self.current_device_codename})."
+        ]
         if flash_mode_data == FlashModes.CLEAN_ALL:
-            confirmation_msg += "<b style='color: red;'>WARNING: This mode will wipe ALL data on your device! Ensure you have a backup.</b>\n"
+            paragraphs.append("<b style='color: red;'>WARNING: This mode will wipe ALL data on your device! Ensure you have a backup.</b>")
         elif flash_mode_data == FlashModes.SAVE_USER_DATA:
-            confirmation_msg += "<b style='color: orange;'>WARNING: This mode keeps user data but wipes the system partition. Proceed with caution.</b>\n"
+            paragraphs.append("<b style='color: orange;'>WARNING: This mode keeps user data but wipes the system partition. Proceed with caution.</b>")
         elif flash_mode_data == FlashModes.SAVE_DATA_AND_STORAGE:
-            confirmation_msg += "<b style='color: green;'>This mode aims to keep your user data and apps. It's generally safer for updates.</b>\n"
+            paragraphs.append("<b style='color: green;'>This mode aims to keep your user data and apps. It's generally safer for updates.</b>")
         elif flash_mode_data == FlashModes.LOCK_BOOTLOADER:
-            confirmation_msg += "<b style='color: red;'>EXTREME CAUTION: This mode will lock your bootloader after flashing. If you flash an incompatible ROM or encounter errors, your device may be bricked! Only use this if you are absolutely sure of the ROM's compatibility and integrity.</b>\n"
+            paragraphs.append("<b style='color: red;'>EXTREME CAUTION: This mode will lock your bootloader after flashing. If you flash an incompatible ROM or encounter errors, your device may be bricked! Only use this if you are absolutely sure of the ROM's compatibility and integrity.</b>")
 
-        confirmation_msg += "\nEnsure your device battery is at least 50% charged and do NOT disconnect the device during flashing.\n"
-        confirmation_msg += "\nAre you absolutely sure you want to proceed?"
+        paragraphs.append("Ensure your device battery is at least 50% charged and do NOT disconnect the device during flashing.")
+        paragraphs.append("Are you absolutely sure you want to proceed?")
 
-        reply = QMessageBox.question(self, "Confirm Flashing Operation", confirmation_msg,
-                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                                     QMessageBox.StandardButton.No)
-
-        if reply == QMessageBox.StandardButton.Yes:
+        if _rich_question(self, "Confirm Flashing Operation", paragraphs):
             self.start_flashing()
         else:
             self.append_log('[INFO] Flashing cancelled by user.')
@@ -1044,15 +1061,14 @@ class MiFlashX(QMainWindow):
             self.worker.start()
 
     def add_to_adbusers_group_action(self):
-        reply = QMessageBox.question(self, "Add User to 'adbusers' Group",
-                                     "This action requires administrator privileges. "
-                                     "It will add your current user to the 'adbusers' group, which can help with device permissions. "
-                                     "You'll be prompted via your system's authentication dialog.\n\n"
-                                     "<b style='color: red;'>Important: You will need to log out and log back in for this change to take effect!</b>\n\n"
-                                     "Do you want to proceed?",
-                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                                     QMessageBox.StandardButton.No)
-        if reply == QMessageBox.StandardButton.Yes:
+        proceed = _rich_question(self, "Add User to 'adbusers' Group", [
+            "This action requires administrator privileges. It will add your current user "
+            "to the 'adbusers' group, which can help with device permissions. You'll be "
+            "prompted via your system's authentication dialog.",
+            "<b style='color: red;'>Important: You will need to log out and log back in for this change to take effect!</b>",
+            "Do you want to proceed?",
+        ])
+        if proceed:
             self.append_log('[INFO] Attempting to add user to \'adbusers\' group...')
             self.set_ui_enabled(False)
             self.statusBar.showMessage("Adding user to 'adbusers' group...")

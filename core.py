@@ -104,7 +104,21 @@ def _safe_extract_zip(zip_ref: zipfile.ZipFile, path: str):
 # The three script basenames flash_rom() ever looks for (see below) — kept
 # here as the single source of truth so validation and actual flashing can't
 # drift out of sync with each other.
-_KNOWN_FLASH_SCRIPT_NAMES = ["flash_all.sh", "flash_all_except_data_storage.sh", "flash_all_lock.sh"]
+_KNOWN_FLASH_SCRIPT_NAMES = ["flash_all.sh", "flash_all_except_data_storage.sh",
+                             "flash_all_except_storage.sh", "flash_all_lock.sh"]
+
+# Which script(s) each mode may run, in order of preference. Xiaomi ships the
+# "keep my data" script under two names depending on ROM generation: older
+# ROMs (e.g. Mi A3, Redmi 6) use flash_all_except_data_storage, while current
+# MIUI/HyperOS packages use flash_all_except_storage. A ROM only contains one
+# of them, so each keep-data mode accepts either — otherwise it would fail with
+# "script not found" on whichever generation it did not hard-code.
+_MODE_SCRIPT_CANDIDATES = {
+    FlashModes.CLEAN_ALL: ["flash_all"],
+    FlashModes.SAVE_USER_DATA: ["flash_all_except_storage", "flash_all_except_data_storage"],
+    FlashModes.SAVE_DATA_AND_STORAGE: ["flash_all_except_data_storage", "flash_all_except_storage"],
+    FlashModes.LOCK_BOOTLOADER: ["flash_all_lock"],
+}
 
 
 def validate_rom_directory(path: str):
@@ -157,6 +171,12 @@ def validate_rom_directory(path: str):
     )
 
 
+# Raw lines printed by a command are forwarded with this prefix so the GUI can
+# tell them apart from FlashingCore's own status messages (and style them
+# differently). Kept here, next to the code that produces it.
+_RAW_PREFIX = "\u2502 "
+
+
 class FlashingCore:
     def __init__(self, adb_path, fastboot_path, output_callback=None):
         self.adb_path = adb_path
@@ -173,33 +193,39 @@ class FlashingCore:
         log_message('info', f"ADB Path: {self.adb_path}, Fastboot Path: {self.fastboot_path}")
         log_message('info', f"Operating System: {self.current_os}")
 
-    def _run(self, command, cwd=None, timeout=30.0):
+    def _run(self, command, cwd=None, timeout=30.0, to_gui=True):
         """
-        Thin wrapper around command_runner.run_command that also streams
-        output to the GUI log and the file log, matching the old
-        _execute_command's side effects. Safe from any thread.
+        Thin wrapper around command_runner.run_command. Output lines are
+        forwarded as the process prints them (so a multi-minute flash shows
+        progress live) to the GUI log — or only to the file log when
+        `to_gui=False`, for chatty background queries like `getvar all`.
+        Safe from any thread.
         """
         command_str = ' '.join(command)
-        self._emit_status(f"Executing command: {command_str}")
+
+        def say(msg):
+            if to_gui:
+                self._emit_status(msg)
+            else:
+                log_message('debug', msg)
+
+        say(f"Executing command: {command_str}")
         log_message('debug', f"Executing: {command_str} in CWD: {cwd}")
 
-        result = run_command(command, cwd=cwd, timeout=timeout)
-
-        for line in result.lines:
-            self._emit_status(line)
-            log_message('debug', f"CMD OUTPUT: {line}")
+        result = run_command(command, cwd=cwd, timeout=timeout,
+                             on_line=lambda line: say(_RAW_PREFIX + line))
 
         if result.timed_out:
-            self._emit_status(f"Command timed out after {timeout}s.")
+            say(f"Command timed out after {timeout}s.")
             log_message('error', f"Command '{command_str}' timed out.")
         elif result.error:
-            self._emit_status(result.error)
+            say(result.error)
             log_message('error', result.error)
         elif result.ok:
-            self._emit_status("Command completed successfully.")
+            say("Command completed successfully.")
             log_message('info', f"Command '{command_str}' completed successfully.")
         else:
-            self._emit_status(f"Command failed with exit code {result.returncode}.")
+            say(f"Command failed with exit code {result.returncode}.")
             log_message('error', f"Command '{command_str}' failed with exit code {result.returncode}")
 
         return result
@@ -214,7 +240,7 @@ class FlashingCore:
             self._emit_status("Fastboot path not set. Cannot detect device.")
             return None
 
-        result = self._run([self.fastboot_path, "devices"], timeout=5.0)
+        result = self._run([self.fastboot_path, "devices"], timeout=5.0, to_gui=False)
 
         if result.ok:
             for line in result.lines:
@@ -236,7 +262,7 @@ class FlashingCore:
             self._emit_status("Fastboot path or device serial not set. Cannot get device info.")
             return info
 
-        result = self._run([self.fastboot_path, "-s", serial, "getvar", "all"], timeout=10.0)
+        result = self._run([self.fastboot_path, "-s", serial, "getvar", "all"], timeout=10.0, to_gui=False)
 
         if result.ok:
             for line in result.lines:
@@ -248,7 +274,9 @@ class FlashingCore:
                 if unlocked_match:
                     info["bootloader_locked"] = "Unlocked" if unlocked_match.group(1) == "yes" else "Locked"
 
-        self._emit_status(f"Device info for {serial}: Codename={info['codename']}, Bootloader={info['bootloader_locked']}")
+        # The GUI announces this itself once the info arrives; log to file only
+        # so the on-screen log doesn't show the same fact twice.
+        log_message('info', f"Device info for {serial}: Codename={info['codename']}, Bootloader={info['bootloader_locked']}")
         return info
 
     def extract_rom(self, rom_file_path, extract_base_dir):
@@ -375,6 +403,42 @@ class FlashingCore:
         except Exception as e:
             return False, f"An error occurred during ROM extraction: {e}"
 
+    def resolve_flash_script(self, rom_path, flash_mode):
+        """
+        Finds the script that `flash_mode` should run inside the ROM at
+        `rom_path` (which may be one level above the real ROM root). Returns
+        (True, script_path) or (False, error_message).
+
+        Shared by flash_rom() and the GUI's confirmation dialog, so the user
+        is shown the exact script that will run *before* anything is flashed,
+        and a ROM that lacks the right script is rejected up front.
+        """
+        root_ok, root = validate_rom_directory(rom_path)
+        if not root_ok:
+            return False, root
+
+        candidates = _MODE_SCRIPT_CANDIDATES.get(flash_mode)
+        if not candidates:
+            return False, f"Error: Unknown flash mode selected: {flash_mode}"
+
+        if self.current_os == "win32":
+            ext = ".bat"
+        elif self.current_os in ("linux", "darwin"):
+            ext = ".sh"
+        else:
+            return False, f"Error: Unsupported operating system: {self.current_os}"
+
+        images_dir = os.path.join(root, "images")
+        for base in candidates:
+            for directory in (images_dir, root):
+                path = os.path.join(directory, base + ext)
+                if os.path.isfile(path):
+                    return True, path
+
+        tried = ", ".join(base + ext for base in candidates)
+        return False, (f"Error: none of the expected flashing scripts ({tried}) were found in "
+                       f"'{images_dir}' or '{root}'. This ROM may not support the selected mode.")
+
     def flash_rom(self, extracted_rom_path, flash_mode):
         """
         Orchestrates the device flashing process. Runs the flash script through
@@ -384,59 +448,13 @@ class FlashingCore:
         """
         self._emit_status(f"Starting device flashing process with mode: {flash_mode}...")
 
-        # Resolve the real ROM root first, via the same validate_rom_directory()
-        # used for the "already-extracted folder" import path in the GUI. This
-        # makes flash_rom() work identically whether extracted_rom_path came
-        # from extract_rom() (already resolved to the nested folder, when there
-        # was one) or from a manually-selected folder that might be one level
-        # above the actual ROM root.
-        root_ok, root_result = validate_rom_directory(extracted_rom_path)
-        if not root_ok:
-            self._emit_status(root_result)
-            log_message('error', root_result)
-            return False, root_result
-        extracted_rom_path = root_result
-
-        script_base_name = ""
-        if flash_mode == FlashModes.CLEAN_ALL:
-            script_base_name = "flash_all"
-        elif flash_mode == FlashModes.SAVE_USER_DATA:
-            script_base_name = "flash_all_except_data_storage"
-        elif flash_mode == FlashModes.LOCK_BOOTLOADER:
-            script_base_name = "flash_all_lock"
-        elif flash_mode == FlashModes.SAVE_DATA_AND_STORAGE:
-            script_base_name = "flash_all_except_data_storage"
-        else:
-            error_msg = f"Error: Unknown flash mode selected: {flash_mode}"
-            self._emit_status(error_msg)
-            log_message('error', error_msg)
-            return False, error_msg
-
-        if self.current_os == "win32":
-            script_full_name = f"{script_base_name}.bat"
-        elif self.current_os in ("linux", "darwin"):
-            script_full_name = f"{script_base_name}.sh"
-        else:
-            error_msg = f"Error: Unsupported operating system: {self.current_os}"
-            self._emit_status(error_msg)
-            log_message('error', error_msg)
-            return False, error_msg
-
-        images_dir = os.path.join(extracted_rom_path, "images")
-        flash_script_path = None
-
-        candidate_script_in_images = os.path.join(images_dir, script_full_name)
-        if os.path.exists(candidate_script_in_images):
-            flash_script_path = candidate_script_in_images
-        else:
-            candidate_script_in_root = os.path.join(extracted_rom_path, script_full_name)
-            if os.path.exists(candidate_script_in_root):
-                flash_script_path = candidate_script_in_root
-            else:
-                error_msg = f"Error: Flashing script '{script_full_name}' not found in '{images_dir}' or '{extracted_rom_path}'."
-                self._emit_status(error_msg)
-                log_message('error', error_msg)
-                return False, error_msg
+        script_ok, script_result = self.resolve_flash_script(extracted_rom_path, flash_mode)
+        if not script_ok:
+            self._emit_status(script_result)
+            log_message('error', script_result)
+            return False, script_result
+        flash_script_path = script_result
+        self._emit_status(f"Using flashing script: {os.path.basename(flash_script_path)}")
 
         if self.current_os in ("linux", "darwin"):
             try:
