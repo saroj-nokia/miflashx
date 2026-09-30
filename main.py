@@ -32,6 +32,17 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("MiFlashX")
     app.setOrganizationName("miflashx")
+
+    # Wayland compositors (GNOME Shell, KDE Plasma) match a running window to
+    # its .desktop entry via the Wayland xdg-toplevel "app_id" property, which
+    # Qt sets from this if given. Under X11/XWayland, WM_CLASS-based matching
+    # was lenient enough that this often worked out by accident; native
+    # Wayland is stricter, so without this the taskbar icon, alt-tab grouping,
+    # and "pin to dock" can end up wrong or missing. Must match the .desktop
+    # file's base name (packaging/miflashx.desktop -> installed as
+    # miflashx.desktop by packaging/install.sh), with no ".desktop" suffix.
+    app.setDesktopFileName("miflashx")
+
     # No app.setStyle(...) call here: leaving this unset lets Qt6's platform
     # theme plugin (qt6ct, QT_QPA_PLATFORMTHEME=gtk3, native Breeze on KDE,
     # etc.) pick the style that matches the user's actual desktop environment

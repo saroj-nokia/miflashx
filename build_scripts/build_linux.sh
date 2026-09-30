@@ -118,10 +118,23 @@ pyi-makespec \
               --hidden-import=command_runner \
               --hidden-import=device_monitor \
               --hidden-import=pyudev \
-              --collect-submodules PyQt6.QtXcbQpa \
               --collect-data PyQt6.Qt \
               --specpath . \
               main.py
+
+# Wayland/X11 platform plugins: no extra flag needed here. This used to have
+# a "--collect-submodules PyQt6.QtXcbQpa" line, which looked like it was
+# forcing X11 (xcb) plugin inclusion but did nothing at all -- PyQt6.QtXcbQpa
+# isn't a real importable module. Verified directly: PyInstaller's own
+# built-in PyQt6.QtGui hook already collects the ENTIRE platforms/ plugin
+# directory automatically (libqxcb.so, libqwayland.so, and everything else in
+# it), plus the wayland-decoration-client / wayland-graphics-integration-client
+# / wayland-shell-integration plugin folders, every time QtGui is imported --
+# which gui.py always does. Confirmed by building the real binary and running
+# it with QT_QPA_PLATFORM=wayland: Qt found and attempted to load the wayland
+# plugin (it only fails in a sandbox with no real compositor socket, which is
+# expected there), and confirmed removing the old flag changes the bundled
+# file set not at all. Nothing to do here for either platform.
 
 SPEC_FILE="MiFlashX.spec"
 

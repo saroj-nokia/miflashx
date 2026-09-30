@@ -5,6 +5,42 @@ All notable changes to MiFlashX are documented here. Format loosely follows
 a formal release yet — everything below is grouped as one in-progress
 overhaul, in the order the work actually happened.
 
+## [Unreleased] — Wayland compatibility investigation
+
+### Investigated, no bug found
+- **The app was already effectively Wayland-capable at the packaging level.**
+  Confirmed empirically, not just by reading docs: `build_linux.sh` had a
+  `--collect-submodules PyQt6.QtXcbQpa` flag that looked like it was forcing
+  X11 platform-plugin inclusion, but `PyQt6.QtXcbQpa` isn't a real importable
+  module — the flag did nothing. PyInstaller's own built-in `PyQt6.QtGui` hook
+  already collects the entire `platforms/` plugin directory automatically
+  (both `libqxcb.so` and `libqwayland.so`), plus the three
+  `wayland-*-integration-client` plugin folders, every time `QtGui` is
+  imported. Verified by building the real binary from the actual
+  `build_linux.sh` and running it with `QT_QPA_PLATFORM=wayland`: Qt located
+  and attempted to load the plugin ("even though it was found" — it only
+  fails here for the expected reason, no compositor socket in a sandbox),
+  and confirmed removing the inert flag changes the bundled file set not at
+  all.
+- **No X11-specific API usage found in the source** (`winId`, `grabMouse`,
+  absolute window positioning, `QSystemTrayIcon`, etc.) — checked directly
+  via search across every module.
+
+### Changed
+- Removed the inert `--collect-submodules PyQt6.QtXcbQpa` line from
+  `build_linux.sh` and replaced it with an accurate comment, since it was
+  actively misleading (implying it was responsible for X11 support it never
+  provided) and left no clear explanation of what actually handles platform
+  plugin bundling (nothing needs to — see above).
+- **`main.py`**: added `app.setDesktopFileName("miflashx")`. This was the one
+  genuine gap: native Wayland compositors (GNOME Shell, KDE Plasma) match a
+  running window to its `.desktop` entry via the Wayland `app_id` property,
+  which Qt sets from this call. Under X11/XWayland, the more lenient
+  WM_CLASS-based matching often worked without it; native Wayland is
+  stricter, so without this, taskbar icon/alt-tab grouping/dock pinning
+  could end up wrong. Must match `packaging/miflashx.desktop`'s installed
+  base name, which it does.
+
 ## [Unreleased] — Fixes found by testing against real Xiaomi ROM scripts
 
 The user provided the actual, unmodified `flash_all.sh`, `flash_all_except_data_storage.sh`, and `flash_all_lock.sh` from a real sapphire ROM. Running them through the app's actual code (not synthetic test scripts) surfaced one blocking bug and two correctness issues.
