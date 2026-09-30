@@ -23,10 +23,10 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
 
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v6
       with:
         python-version: '3.10'
         cache: 'pip'
@@ -70,7 +70,7 @@ jobs:
         fi
 
     - name: Upload MiFlashX executable as artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       # Only runs if every previous step actually succeeded — this is the
       # default behavior; no `if: always()` override needed or wanted here.
       with:
