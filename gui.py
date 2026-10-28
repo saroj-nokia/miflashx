@@ -280,6 +280,14 @@ class MiFlashX(QMainWindow):
         if hasattr(self, '_cards'):
             self.apply_card_theme()
 
+        # The palette/stylesheet swap above is instant, which reads as a
+        # jarring flash. A quick fade-in after the fact (not a true
+        # crossfade of old vs. new content, just the same opacity-ramp
+        # trick showEvent() uses) smooths the transition without touching
+        # how theming itself works.
+        if getattr(self, '_fade_played', False):
+            self._fade_window_in(0.55, duration=180)
+
     def closeEvent(self, event):
         if self.device_monitor:
             self.device_monitor.stop()
@@ -698,19 +706,24 @@ class MiFlashX(QMainWindow):
             effect.setColor(shadow_color)
             card.setGraphicsEffect(effect)
 
+    def _fade_window_in(self, start: float, duration: int = 220):
+        """Animates window opacity from `start` up to 1.0. Shared by the
+        first-show fade-in and the theme-switch crossfade below."""
+        self.setWindowOpacity(start)
+        self._fade_anim = QPropertyAnimation(self, QByteArray(b"windowOpacity"), self)
+        self._fade_anim.setDuration(duration)
+        self._fade_anim.setStartValue(start)
+        self._fade_anim.setEndValue(1.0)
+        self._fade_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._fade_anim.start()
+
     def showEvent(self, event):
         """Fade the window in on first show — a small touch, but it's the
         one animation every user sees, every time, on every desktop."""
         super().showEvent(event)
         if not getattr(self, '_fade_played', False):
             self._fade_played = True
-            self.setWindowOpacity(0.0)
-            self._fade_anim = QPropertyAnimation(self, QByteArray(b"windowOpacity"), self)
-            self._fade_anim.setDuration(220)
-            self._fade_anim.setStartValue(0.0)
-            self._fade_anim.setEndValue(1.0)
-            self._fade_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-            self._fade_anim.start()
+            self._fade_window_in(0.0)
 
     def _pulse_label(self, label: QLabel):
         """Brief opacity pulse to draw the eye to a status change (e.g. a
@@ -754,7 +767,7 @@ class MiFlashX(QMainWindow):
         except Exception:
             return False
 
-    def check_initial_setup(self):
+    def check_initial_setup(self, is_recheck: bool = False):
         """
         Performs initial checks on application startup: ADB/Fastboot presence,
         udev rules status, and 'adbusers' group membership.
@@ -789,6 +802,8 @@ class MiFlashX(QMainWindow):
             if udev_ok:
                 self.udev_status_label.setText(f"✅ Udev Rules (Linux): <font color='green'>{udev_msg}</font>")
                 self.install_udev_button.setEnabled(False)
+                if is_recheck:
+                    self._pulse_label(self.udev_status_label)
             else:
                 self.udev_status_label.setText(f"⚠️ Udev Rules (Linux): <font color='red'>{udev_msg}</font>")
                 self.install_udev_button.setEnabled(True)
@@ -798,6 +813,8 @@ class MiFlashX(QMainWindow):
             adbusers_ok = self._adbusers_ok()
             self.adbusers_status_label.setText("✅ User in 'adbusers' group: <font color='green'>Yes</font>" if adbusers_ok else "⚠️ User in 'adbusers' group: <font color='red'>No</font>")
             self.add_adbusers_button.setEnabled(not adbusers_ok)
+            if is_recheck and adbusers_ok:
+                self._pulse_label(self.adbusers_status_label)
             if not adbusers_ok:
                 self.append_log('[WARNING] Your user is not in the \'adbusers\' group. This can cause permission issues. Click \'Add User to adbusers group\'.')
                 self.append_log('[INFO] Remember to log out and back in after adding user to group for changes to take effect.')
@@ -1046,7 +1063,7 @@ class MiFlashX(QMainWindow):
                     QMessageBox.information(self, "Udev Rules Installed", message)
                     self.append_log(f'[INFO] {message}')
                     self.statusBar.showMessage("Udev rules installed.")
-                    self.check_initial_setup()
+                    self.check_initial_setup(is_recheck=True)
                 else:
                     QMessageBox.critical(self, "Udev Rules Installation Failed", message)
                     self.append_log(f'[ERROR] {message}')
@@ -1076,7 +1093,7 @@ class MiFlashX(QMainWindow):
                     QMessageBox.information(self, "User Added to Group", message)
                     self.append_log(f'[INFO] {message}')
                     self.statusBar.showMessage("User added to 'adbusers' group. Please re-login.")
-                    self.check_initial_setup()
+                    self.check_initial_setup(is_recheck=True)
                 else:
                     QMessageBox.critical(self, "Add User to Group Failed", message)
                     self.append_log(f'[ERROR] {message}')
