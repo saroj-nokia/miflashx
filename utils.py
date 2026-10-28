@@ -84,25 +84,33 @@ _VERSION_ARGS = {"adb": ["version"], "fastboot": ["--version"]}
 
 
 def _tool_version(path: str, tool_name: str):
-    """Runs `path version`/`--version` and parses the first X.Y.Z it finds.
-    Returns a tuple of ints, or None if the tool couldn't be run or its
-    output didn't contain a recognizable version number."""
-    try:
-        result = subprocess.run([path] + _VERSION_ARGS[tool_name], capture_output=True,
-                                 text=True, timeout=5, check=False)
-        output = (result.stdout or "") + (result.stderr or "")
-        # `adb version` prints a constant "Android Debug Bridge version
-        # 1.0.41" protocol line FIRST, then the real build number on its own
-        # "Version X.Y.Z-..." line (capital V) -- matching generically would
-        # always read 1.0.41 and never notice a real version difference.
-        # Try the capital-V build-version line first; fastboot has no such
-        # line, so it falls through to the generic match below.
-        match = re.search(r"Version\s+(\d+)\.(\d+)\.(\d+)", output) or \
-                re.search(r"(\d+)\.(\d+)\.(\d+)", output)
-        if match:
-            return tuple(int(g) for g in match.groups())
-    except Exception as e:
-        log_message('debug', f"Could not determine {tool_name} version at {path}: {e}")
+    """Runs `path version`/`--version` (falling back to a bare, no-args
+    invocation if that gives no usable output -- some non-Google adb/
+    fastboot builds, e.g. the "android-tools" project package shipped by
+    openSUSE/Arch/Debian, don't answer "version" the same way Google's does
+    but still print their version banner on a bare call) and parses the
+    first X.Y.Z it finds. Returns a tuple of ints, or None if neither
+    invocation produced a recognizable version number."""
+    for args in (_VERSION_ARGS[tool_name], []):
+        try:
+            result = subprocess.run([path] + args, capture_output=True,
+                                     text=True, timeout=5, check=False)
+            output = (result.stdout or "") + (result.stderr or "")
+            # `adb version` prints a constant "Android Debug Bridge version
+            # 1.0.41" protocol line FIRST, then the real build number on its
+            # own "Version X.Y.Z-..." line (capital V) -- matching
+            # generically would always read 1.0.41 and never notice a real
+            # version difference. Try the capital-V build-version line
+            # first; fastboot has no such line, so it falls through to the
+            # generic match below. The android-tools build's version string
+            # ("Version 37.0.0p1-android-tools") still matches fine -- the
+            # regex just stops at the first non-digit after the patch number.
+            match = re.search(r"Version\s+(\d+)\.(\d+)\.(\d+)", output) or \
+                    re.search(r"(\d+)\.(\d+)\.(\d+)", output)
+            if match:
+                return tuple(int(g) for g in match.groups())
+        except Exception as e:
+            log_message('debug', f"Could not determine {tool_name} version at {path} with args {args}: {e}")
     return None
 
 
