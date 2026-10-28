@@ -1,8 +1,30 @@
 import os
 import sys
 import logging
+import shutil
 import subprocess
 import tempfile
+
+# pkexec resolves the program it's told to run via its OWN restricted secure
+# PATH, not the invoking user's PATH -- and that secure PATH varies by distro
+# (e.g. openSUSE's pkexec build doesn't always include /usr/sbin, where
+# usermod/groupadd live). Resolving to an absolute path ourselves -- using our
+# own process's full PATH -- sidesteps pkexec's PATH lookup entirely.
+_PRIVILEGED_BIN_FALLBACK_DIRS = ["/usr/sbin", "/sbin", "/usr/bin", "/bin"]
+
+
+def _resolve_privileged_bin(name: str) -> str:
+    """Resolves `name` to an absolute path, falling back to common sbin/bin
+    dirs if it's not on our own PATH. Returns `name` unchanged if not found
+    anywhere, so the original (clearer) pkexec error still surfaces."""
+    found = shutil.which(name)
+    if found:
+        return found
+    for d in _PRIVILEGED_BIN_FALLBACK_DIRS:
+        candidate = os.path.join(d, name)
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return name
 
 # --- Logging Setup ---
 # Previously this wrote to a folder next to __file__, which under PyInstaller's
@@ -170,18 +192,20 @@ def install_udev_rules():
 
         # `install` copies + sets ownership/permissions in one privileged step,
         # rather than piping through `tee`, which doesn't play well with pkexec.
-        ok, msg = _run_privileged(["pkexec", "install", "-m", "644", tmp_path, udev_rules_path])
+        install_bin = _resolve_privileged_bin("install")
+        ok, msg = _run_privileged(["pkexec", install_bin, "-m", "644", tmp_path, udev_rules_path])
         if not ok:
             error_msg = f"Failed to write udev rules: {msg}"
             log_message('error', error_msg)
             return False, error_msg
 
         log_message('info', "Udev rules written. Reloading udev rules...")
-        ok, msg = _run_privileged(["pkexec", "udevadm", "control", "--reload-rules"])
+        udevadm_bin = _resolve_privileged_bin("udevadm")
+        ok, msg = _run_privileged(["pkexec", udevadm_bin, "control", "--reload-rules"])
         if not ok:
             return False, f"Udev rules written but reload failed: {msg}"
 
-        ok, msg = _run_privileged(["pkexec", "udevadm", "trigger"])
+        ok, msg = _run_privileged(["pkexec", udevadm_bin, "trigger"])
         if not ok:
             return False, f"Udev rules written but trigger failed: {msg}"
 
@@ -217,9 +241,11 @@ def add_to_adbusers_group():
     log_message('info', f"Attempting to add user '{current_user}' to 'adbusers' group...")
 
     # Ignore failure here: group may already exist, which is fine.
-    subprocess.run(["pkexec", "groupadd", "adbusers"], stderr=subprocess.DEVNULL, check=False)
+    groupadd_bin = _resolve_privileged_bin("groupadd")
+    subprocess.run(["pkexec", groupadd_bin, "adbusers"], stderr=subprocess.DEVNULL, check=False)
 
-    ok, msg = _run_privileged(["pkexec", "usermod", "-aG", "adbusers", current_user])
+    usermod_bin = _resolve_privileged_bin("usermod")
+    ok, msg = _run_privileged(["pkexec", usermod_bin, "-aG", "adbusers", current_user])
     if not ok:
         error_msg = f"Failed to add user to 'adbusers' group: {msg}"
         log_message('error', error_msg)
