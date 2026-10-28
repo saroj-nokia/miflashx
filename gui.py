@@ -790,6 +790,13 @@ class MiFlashX(QMainWindow):
                              f"Fastboot: {self.fastboot_path} ({tool_info.fastboot_source})")
             for warning in tool_info.warnings:
                 self.append_log(f"[WARNING] {warning}")
+            # Most users won't go looking at the log panel for this, so also
+            # surface it as a popup -- but only on the initial check, not on
+            # every recheck triggered by an unrelated udev/adbusers fix
+            # (find_adb_fastboot() re-runs each time and would otherwise
+            # re-pop the same warning repeatedly).
+            if tool_info.warnings and not is_recheck:
+                QMessageBox.warning(self, "Outdated System Tools Detected", "\n\n".join(tool_info.warnings))
             self.extract_rom_button.setEnabled(True)
         else:
             self.adb_fastboot_status_label.setText("❌ ADB/Fastboot: <font color='red'>Not Found</font>. Please ensure Android SDK Platform Tools are installed and accessible.")
