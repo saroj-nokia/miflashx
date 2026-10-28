@@ -74,46 +74,42 @@ def get_os():
 def find_adb_fastboot():
     """
     Attempts to find adb and fastboot executables.
-    Prioritizes bundled tools, then system PATH.
+    Prioritizes the system's own install (e.g. `android-tools`/`platform-tools`
+    from the distro repos or installed directly from Google) over the copy
+    bundled with this app, per-binary. A system install is usually newer and
+    is the one already covered by the system's udev rules/package updates,
+    so it's preferred when present; the bundled copy is only a fallback for
+    whichever of adb/fastboot the system doesn't have.
     Returns a tuple (adb_path, fastboot_path) or (None, None) if not found.
     """
-    adb_path = None
-    fastboot_path = None
+    adb_path = shutil.which("adb")
+    fastboot_path = shutil.which("fastboot")
+    if adb_path:
+        log_message('debug', f"Found system-installed adb in PATH: {adb_path}")
+    if fastboot_path:
+        log_message('debug', f"Found system-installed fastboot in PATH: {fastboot_path}")
+
+    if adb_path and fastboot_path:
+        return adb_path, fastboot_path
 
     base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
     bundled_dir = os.path.join(base_path, "platform-tools")
-
     if os.path.isdir(bundled_dir):
-        adb_candidate = os.path.join(bundled_dir, "adb")
-        fastboot_candidate = os.path.join(bundled_dir, "fastboot")
+        if not adb_path:
+            candidate = os.path.join(bundled_dir, "adb")
+            if os.path.exists(candidate) and os.access(candidate, os.X_OK):
+                adb_path = candidate
+                log_message('info', f"Using bundled adb (not found on system PATH): {candidate}")
+        if not fastboot_path:
+            candidate = os.path.join(bundled_dir, "fastboot")
+            if os.path.exists(candidate) and os.access(candidate, os.X_OK):
+                fastboot_path = candidate
+                log_message('info', f"Using bundled fastboot (not found on system PATH): {candidate}")
 
-        if os.path.exists(adb_candidate) and os.access(adb_candidate, os.X_OK):
-            adb_path = adb_candidate
-        if os.path.exists(fastboot_candidate) and os.access(fastboot_candidate, os.X_OK):
-            fastboot_path = fastboot_candidate
-
-        if adb_path and fastboot_path:
-            log_message('info', f"Found bundled platform-tools: {bundled_dir}")
-            return adb_path, fastboot_path
-
-    log_message('info', "Bundled platform-tools not found or incomplete, checking system PATH.")
-    try:
-        adb_result = subprocess.run(["which", "adb"], capture_output=True, text=True, check=False)
-        if adb_result.returncode == 0:
-            adb_path = adb_result.stdout.strip()
-            log_message('debug', f"Found adb in PATH: {adb_path}")
-        else:
-            log_message('warning', "adb not found in system PATH.")
-
-        fastboot_result = subprocess.run(["which", "fastboot"], capture_output=True, text=True, check=False)
-        if fastboot_result.returncode == 0:
-            fastboot_path = fastboot_result.stdout.strip()
-            log_message('debug', f"Found fastboot in PATH: {fastboot_path}")
-        else:
-            log_message('warning', "fastboot not found in system PATH.")
-
-    except Exception as e:
-        log_message('error', f"Error checking system PATH for adb/fastboot: {e}")
+    if not adb_path:
+        log_message('warning', "adb not found on system PATH or bundled with the app.")
+    if not fastboot_path:
+        log_message('warning', "fastboot not found on system PATH or bundled with the app.")
 
     return adb_path, fastboot_path
 
