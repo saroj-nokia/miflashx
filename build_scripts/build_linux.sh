@@ -99,9 +99,14 @@ echo "Android Platform Tools prepared."
 # could hang the build for many seconds, growing exponentially from there
 # (CWE-1333/400/730, confirmed by direct timing test — n=10 took 0.05s,
 # n=15 exceeded 5s). --paths writes directly into the spec's pathex
-# argument, and --debug=imports achieves the same debug-imports behavior
-# modify_spec.py was hand-patching in — both without touching the spec file
-# as text at all. modify_spec.py has been removed from the project.
+# argument, without touching the spec file as text at all.
+# modify_spec.py has been removed from the project.
+#
+# Note: --debug=imports (verbose import tracing printed on every launch of
+# the shipped binary) was dropped here — it was only ever needed to match
+# modify_spec.py's old behavior during the migration above, not something a
+# release build should ship with. Pass it manually if you need to debug a
+# PyInstaller import issue.
 echo "Generating PyInstaller .spec file..."
 pyi-makespec \
               --onefile \
@@ -111,7 +116,6 @@ pyi-makespec \
               --add-data "assets:assets" \
               --add-data "platform-tools:platform-tools" \
               --paths "$(pwd)" \
-              --debug=imports \
               --hidden-import=utils \
               --hidden-import=core \
               --hidden-import=gui \

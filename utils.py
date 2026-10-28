@@ -35,13 +35,19 @@ LOG_DIR = os.path.join(os.path.expanduser("~"), ".local", "share", "miflashx", "
 os.makedirs(LOG_DIR, exist_ok=True)
 LOG_FILE = os.path.join(LOG_DIR, "miflashx.log")
 
+# DEBUG level + echoing every line to stdout is dev-only noise for a
+# user-facing release (and a --windowed PyInstaller build has no terminal to
+# show it on anyway). Set MIFLASHX_DEBUG=1 to get the old verbose behavior
+# back; the log file always keeps full detail either way.
+_DEBUG_ENV = os.getenv("MIFLASHX_DEBUG") == "1"
+_log_handlers = [logging.FileHandler(LOG_FILE)]
+if _DEBUG_ENV:
+    _log_handlers.append(logging.StreamHandler(sys.stdout))
+
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.DEBUG if _DEBUG_ENV else logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(LOG_FILE),
-        logging.StreamHandler(sys.stdout)
-    ]
+    handlers=_log_handlers
 )
 
 
