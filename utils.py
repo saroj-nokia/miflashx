@@ -1,9 +1,18 @@
 import os
+import re
 import sys
 import logging
 import shutil
 import subprocess
 import tempfile
+from collections import namedtuple
+
+# adb_path/fastboot_path: resolved absolute paths (or None if neither system
+# nor bundled has the tool). *_source: "system" or "bundled", telling the
+# caller/UI which copy actually got used. warnings: human-readable strings
+# (e.g. "system adb is older than the bundled copy") for cases worth
+# surfacing to the user but not worth failing over.
+ToolInfo = namedtuple("ToolInfo", ["adb_path", "fastboot_path", "adb_source", "fastboot_source", "warnings"])
 
 # pkexec resolves the program it's told to run via its OWN restricted secure
 # PATH, not the invoking user's PATH -- and that secure PATH varies by distro
@@ -71,47 +80,93 @@ def get_os():
 
 
 # --- ADB/Fastboot Path Discovery ---
-def find_adb_fastboot():
+_VERSION_ARGS = {"adb": ["version"], "fastboot": ["--version"]}
+
+
+def _tool_version(path: str, tool_name: str):
+    """Runs `path version`/`--version` and parses the first X.Y.Z it finds.
+    Returns a tuple of ints, or None if the tool couldn't be run or its
+    output didn't contain a recognizable version number."""
+    try:
+        result = subprocess.run([path] + _VERSION_ARGS[tool_name], capture_output=True,
+                                 text=True, timeout=5, check=False)
+        output = (result.stdout or "") + (result.stderr or "")
+        # `adb version` prints a constant "Android Debug Bridge version
+        # 1.0.41" protocol line FIRST, then the real build number on its own
+        # "Version X.Y.Z-..." line (capital V) -- matching generically would
+        # always read 1.0.41 and never notice a real version difference.
+        # Try the capital-V build-version line first; fastboot has no such
+        # line, so it falls through to the generic match below.
+        match = re.search(r"Version\s+(\d+)\.(\d+)\.(\d+)", output) or \
+                re.search(r"(\d+)\.(\d+)\.(\d+)", output)
+        if match:
+            return tuple(int(g) for g in match.groups())
+    except Exception as e:
+        log_message('debug', f"Could not determine {tool_name} version at {path}: {e}")
+    return None
+
+
+def _resolve_tool(tool_name: str, system_path: str, bundled_path: str):
+    """Picks which copy of a tool (adb/fastboot) to use between a
+    system-installed one and the one bundled with this app.
+
+    Prefers the system copy (it's what the system's own udev rules/package
+    manager already track) UNLESS the bundled copy is a newer version, in
+    which case the bundled copy is used and a warning is returned so the UI
+    can tell the user their system copy is outdated.
+    Returns (path, source, warning_or_None).
+    """
+    if system_path and bundled_path:
+        sys_ver = _tool_version(system_path, tool_name)
+        bundled_ver = _tool_version(bundled_path, tool_name)
+        if sys_ver and bundled_ver and sys_ver < bundled_ver:
+            warning = (f"System {tool_name} ({'.'.join(map(str, sys_ver))}) is older than the "
+                       f"version bundled with MiFlashX ({'.'.join(map(str, bundled_ver))}). "
+                       f"Using the bundled copy — consider updating your system's {tool_name} tool.")
+            log_message('warning', warning)
+            return bundled_path, "bundled", warning
+        return system_path, "system", None
+    if system_path:
+        return system_path, "system", None
+    if bundled_path:
+        return bundled_path, "bundled", None
+    return None, None, None
+
+
+def find_adb_fastboot() -> ToolInfo:
     """
     Attempts to find adb and fastboot executables.
     Prioritizes the system's own install (e.g. `android-tools`/`platform-tools`
     from the distro repos or installed directly from Google) over the copy
-    bundled with this app, per-binary. A system install is usually newer and
-    is the one already covered by the system's udev rules/package updates,
-    so it's preferred when present; the bundled copy is only a fallback for
-    whichever of adb/fastboot the system doesn't have.
-    Returns a tuple (adb_path, fastboot_path) or (None, None) if not found.
+    bundled with this app, per-binary — UNLESS the system copy is an older
+    version than the bundled one, in which case the (newer) bundled copy is
+    used and a warning is included so the caller can surface it.
     """
-    adb_path = shutil.which("adb")
-    fastboot_path = shutil.which("fastboot")
-    if adb_path:
-        log_message('debug', f"Found system-installed adb in PATH: {adb_path}")
-    if fastboot_path:
-        log_message('debug', f"Found system-installed fastboot in PATH: {fastboot_path}")
-
-    if adb_path and fastboot_path:
-        return adb_path, fastboot_path
+    system_adb = shutil.which("adb")
+    system_fastboot = shutil.which("fastboot")
 
     base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
     bundled_dir = os.path.join(base_path, "platform-tools")
+    bundled_adb = bundled_fastboot = None
     if os.path.isdir(bundled_dir):
-        if not adb_path:
-            candidate = os.path.join(bundled_dir, "adb")
-            if os.path.exists(candidate) and os.access(candidate, os.X_OK):
-                adb_path = candidate
-                log_message('info', f"Using bundled adb (not found on system PATH): {candidate}")
-        if not fastboot_path:
-            candidate = os.path.join(bundled_dir, "fastboot")
-            if os.path.exists(candidate) and os.access(candidate, os.X_OK):
-                fastboot_path = candidate
-                log_message('info', f"Using bundled fastboot (not found on system PATH): {candidate}")
+        candidate = os.path.join(bundled_dir, "adb")
+        if os.path.exists(candidate) and os.access(candidate, os.X_OK):
+            bundled_adb = candidate
+        candidate = os.path.join(bundled_dir, "fastboot")
+        if os.path.exists(candidate) and os.access(candidate, os.X_OK):
+            bundled_fastboot = candidate
 
-    if not adb_path:
-        log_message('warning', "adb not found on system PATH or bundled with the app.")
-    if not fastboot_path:
-        log_message('warning', "fastboot not found on system PATH or bundled with the app.")
+    adb_path, adb_source, adb_warning = _resolve_tool("adb", system_adb, bundled_adb)
+    fastboot_path, fastboot_source, fastboot_warning = _resolve_tool("fastboot", system_fastboot, bundled_fastboot)
 
-    return adb_path, fastboot_path
+    for name, path, source in (("adb", adb_path, adb_source), ("fastboot", fastboot_path, fastboot_source)):
+        if path:
+            log_message('debug', f"Using {source} {name}: {path}")
+        else:
+            log_message('warning', f"{name} not found on system PATH or bundled with the app.")
+
+    warnings = [w for w in (adb_warning, fastboot_warning) if w]
+    return ToolInfo(adb_path, fastboot_path, adb_source, fastboot_source, warnings)
 
 
 # --- Udev Rule Management (Linux Only) ---

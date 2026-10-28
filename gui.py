@@ -774,15 +774,22 @@ class MiFlashX(QMainWindow):
         """
         self.append_log("[INFO] Performing initial setup checks...")
 
-        self.adb_path, self.fastboot_path = find_adb_fastboot()
+        tool_info = find_adb_fastboot()
+        self.adb_path, self.fastboot_path = tool_info.adb_path, tool_info.fastboot_path
         if self.adb_path and self.fastboot_path:
-            self.adb_fastboot_status_label.setText("✅ ADB/Fastboot: <font color='green'>Found</font>")
+            self.adb_fastboot_status_label.setText(
+                f"✅ ADB/Fastboot: <font color='green'>Found</font> "
+                f"(adb: {tool_info.adb_source}, fastboot: {tool_info.fastboot_source})"
+            )
             self.flashing_core = FlashingCore(
                 adb_path=self.adb_path,
                 fastboot_path=self.fastboot_path,
                 output_callback=lambda level, msg: self.append_log(f"[{level.upper()}] {msg}")
             )
-            self.append_log(f"[INFO] ADB: {self.adb_path}, Fastboot: {self.fastboot_path}")
+            self.append_log(f"[INFO] ADB: {self.adb_path} ({tool_info.adb_source}), "
+                             f"Fastboot: {self.fastboot_path} ({tool_info.fastboot_source})")
+            for warning in tool_info.warnings:
+                self.append_log(f"[WARNING] {warning}")
             self.extract_rom_button.setEnabled(True)
         else:
             self.adb_fastboot_status_label.setText("❌ ADB/Fastboot: <font color='red'>Not Found</font>. Please ensure Android SDK Platform Tools are installed and accessible.")
