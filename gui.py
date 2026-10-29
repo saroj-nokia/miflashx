@@ -6,7 +6,7 @@ import subprocess
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QLineEdit, QLabel,
                              QTextEdit, QFileDialog, QGroupBox, QFrame,
-                             QRadioButton, QButtonGroup, QScrollArea,
+                             QRadioButton, QButtonGroup, QScrollArea, QCheckBox,
                              QMessageBox, QProgressBar,
                              QStatusBar, QGraphicsDropShadowEffect, QGraphicsOpacityEffect)
 from PyQt6.QtCore import QThread, pyqtSignal, QPropertyAnimation, QEasingCurve, QByteArray, QSettings, Qt
@@ -767,6 +767,46 @@ class MiFlashX(QMainWindow):
         except Exception:
             return False
 
+    def _prompt_tool_choice(self, tool_name: str, choice):
+        """Shown when both a system and bundled copy of `tool_name` exist
+        with different, known versions. Lets the user pick which one to
+        use instead of silently accepting the app's default (e.g. a system
+        copy that's technically "older" by version number but the user
+        knows is fine, as on a rolling-release distro). Returns
+        (chosen_path, chosen_source). If "Remember" is checked, the choice
+        is saved to QSettings so find_adb_fastboot() applies it directly
+        on future launches without asking again."""
+        sys_ver = ".".join(map(str, choice.system_version))
+        bundled_ver = ".".join(map(str, choice.bundled_version))
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle(f"Choose {tool_name} version to use")
+        box.setTextFormat(Qt.TextFormat.RichText)
+        box.setText(
+            f"Both a system-installed and a bundled copy of <b>{tool_name}</b> were found, "
+            f"with different versions:<br><br>"
+            f"System: <b>{sys_ver}</b><br>"
+            f"Bundled with MiFlashX: <b>{bundled_ver}</b><br><br>"
+            f"Which one should MiFlashX use?"
+        )
+        system_button = box.addButton(f"Use System ({sys_ver})", QMessageBox.ButtonRole.AcceptRole)
+        bundled_button = box.addButton(f"Use Bundled ({bundled_ver})", QMessageBox.ButtonRole.AcceptRole)
+        box.setDefaultButton(system_button if choice.system_version >= choice.bundled_version else bundled_button)
+        remember_checkbox = QCheckBox("Remember this choice for future launches")
+        box.setCheckBox(remember_checkbox)
+        box.exec()
+
+        if box.clickedButton() is system_button:
+            chosen_path, chosen_source = choice.system_path, "system"
+        else:
+            chosen_path, chosen_source = choice.bundled_path, "bundled"
+
+        if remember_checkbox.isChecked():
+            self.settings.setValue(f"{tool_name}_source_pref", chosen_source)
+            self.append_log(f"[INFO] Remembering choice: using {chosen_source} {tool_name} from now on.")
+
+        return chosen_path, chosen_source
+
     def check_initial_setup(self, is_recheck: bool = False):
         """
         Performs initial checks on application startup: ADB/Fastboot presence,
@@ -774,29 +814,52 @@ class MiFlashX(QMainWindow):
         """
         self.append_log("[INFO] Performing initial setup checks...")
 
-        tool_info = find_adb_fastboot()
-        self.adb_path, self.fastboot_path = tool_info.adb_path, tool_info.fastboot_path
+        preferred_source = {
+            "adb": self.settings.value("adb_source_pref"),
+            "fastboot": self.settings.value("fastboot_source_pref"),
+        }
+        tool_info = find_adb_fastboot(preferred_source=preferred_source)
+        self.adb_path, adb_source = tool_info.adb_path, tool_info.adb_source
+        self.fastboot_path, fastboot_source = tool_info.fastboot_path, tool_info.fastboot_source
+
+        # Only ask on the initial check, never on a recheck triggered by an
+        # unrelated udev/adbusers fix (find_adb_fastboot() re-runs each
+        # time and would otherwise re-ask every time). A choice only exists
+        # (tool_info.*_choice is not None) when both copies were found with
+        # different, determinable versions AND no remembered preference was
+        # already applied above.
+        dialog_shown = False
+        if not is_recheck:
+            if tool_info.adb_choice and not preferred_source.get("adb"):
+                self.adb_path, adb_source = self._prompt_tool_choice("adb", tool_info.adb_choice)
+                dialog_shown = True
+            if tool_info.fastboot_choice and not preferred_source.get("fastboot"):
+                self.fastboot_path, fastboot_source = self._prompt_tool_choice("fastboot", tool_info.fastboot_choice)
+                dialog_shown = True
+
         if self.adb_path and self.fastboot_path:
             self.adb_fastboot_status_label.setText(
                 f"✅ ADB/Fastboot: <font color='green'>Found</font> "
-                f"(adb: {tool_info.adb_source}, fastboot: {tool_info.fastboot_source})"
+                f"(adb: {adb_source}, fastboot: {fastboot_source})"
             )
             self.flashing_core = FlashingCore(
                 adb_path=self.adb_path,
                 fastboot_path=self.fastboot_path,
                 output_callback=lambda level, msg: self.append_log(f"[{level.upper()}] {msg}")
             )
-            self.append_log(f"[INFO] ADB: {self.adb_path} ({tool_info.adb_source}), "
-                             f"Fastboot: {self.fastboot_path} ({tool_info.fastboot_source})")
-            for warning in tool_info.warnings:
-                self.append_log(f"[WARNING] {warning}")
-            # Most users won't go looking at the log panel for this, so also
-            # surface it as a popup -- but only on the initial check, not on
-            # every recheck triggered by an unrelated udev/adbusers fix
-            # (find_adb_fastboot() re-runs each time and would otherwise
-            # re-pop the same warning repeatedly).
-            if tool_info.warnings and not is_recheck:
-                QMessageBox.warning(self, "Outdated System Tools Detected", "\n\n".join(tool_info.warnings))
+            self.append_log(f"[INFO] ADB: {self.adb_path} ({adb_source}), "
+                             f"Fastboot: {self.fastboot_path} ({fastboot_source})")
+            # If a choice dialog was just shown, it already fully resolved
+            # and explained the mismatch -- the generic warning/popup below
+            # would just be a redundant second nag about the same thing.
+            if not dialog_shown:
+                for warning in tool_info.warnings:
+                    self.append_log(f"[WARNING] {warning}")
+                # Most users won't go looking at the log panel for this, so
+                # also surface it as a popup -- but only on the initial
+                # check, not on every unrelated recheck.
+                if tool_info.warnings and not is_recheck:
+                    QMessageBox.warning(self, "Outdated System Tools Detected", "\n\n".join(tool_info.warnings))
             self.extract_rom_button.setEnabled(True)
         else:
             self.adb_fastboot_status_label.setText("❌ ADB/Fastboot: <font color='red'>Not Found</font>. Please ensure Android SDK Platform Tools are installed and accessible.")

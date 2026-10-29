@@ -11,8 +11,14 @@ from collections import namedtuple
 # nor bundled has the tool). *_source: "system" or "bundled", telling the
 # caller/UI which copy actually got used. warnings: human-readable strings
 # (e.g. "system adb is older than the bundled copy") for cases worth
-# surfacing to the user but not worth failing over.
-ToolInfo = namedtuple("ToolInfo", ["adb_path", "fastboot_path", "adb_source", "fastboot_source", "warnings"])
+# surfacing to the user but not worth failing over. adb_choice/fastboot_choice:
+# a ToolChoice when both a system AND bundled copy exist with DIFFERENT,
+# determinable versions -- lets the caller offer the user a pick instead of
+# the auto-decision silently winning; None when there's nothing to choose
+# between (only one copy present, or versions are equal/unknown).
+ToolInfo = namedtuple("ToolInfo", ["adb_path", "fastboot_path", "adb_source", "fastboot_source",
+                                    "warnings", "adb_choice", "fastboot_choice"])
+ToolChoice = namedtuple("ToolChoice", ["system_path", "bundled_path", "system_version", "bundled_version"])
 
 # pkexec resolves the program it's told to run via its OWN restricted secure
 # PATH, not the invoking user's PATH -- and that secure PATH varies by distro
@@ -114,42 +120,59 @@ def _tool_version(path: str, tool_name: str):
     return None
 
 
-def _resolve_tool(tool_name: str, system_path: str, bundled_path: str):
+def _resolve_tool(tool_name: str, system_path: str, bundled_path: str, preferred_source: str = None):
     """Picks which copy of a tool (adb/fastboot) to use between a
     system-installed one and the one bundled with this app.
 
-    Prefers the system copy (it's what the system's own udev rules/package
-    manager already track) UNLESS the bundled copy is a newer version, in
-    which case the bundled copy is used and a warning is returned so the UI
-    can tell the user their system copy is outdated.
-    Returns (path, source, warning_or_None).
+    If `preferred_source` ("system"/"bundled") is given and that copy
+    actually exists, it wins outright -- this is how a user's remembered
+    choice from the picker dialog gets applied without re-asking.
+
+    Otherwise: prefers the system copy (it's what the system's own udev
+    rules/package manager already track) UNLESS the bundled copy is a
+    newer, determinably-different version, in which case the bundled copy
+    is used by default and a warning is returned. When both versions ARE
+    known and differ, a ToolChoice is also returned so the caller can offer
+    the user a pick instead of just accepting the default.
+    Returns (path, source, warning_or_None, choice_or_None).
     """
     if system_path and bundled_path:
         sys_ver = _tool_version(system_path, tool_name)
         bundled_ver = _tool_version(bundled_path, tool_name)
+        choice = ToolChoice(system_path, bundled_path, sys_ver, bundled_ver) \
+            if sys_ver and bundled_ver and sys_ver != bundled_ver else None
+
+        if preferred_source == "system":
+            return system_path, "system", None, choice
+        if preferred_source == "bundled":
+            return bundled_path, "bundled", None, choice
+
         if sys_ver and bundled_ver and sys_ver < bundled_ver:
             warning = (f"System {tool_name} ({'.'.join(map(str, sys_ver))}) is older than the "
                        f"version bundled with MiFlashX ({'.'.join(map(str, bundled_ver))}). "
                        f"Using the bundled copy — consider updating your system's {tool_name} tool.")
             log_message('warning', warning)
-            return bundled_path, "bundled", warning
-        return system_path, "system", None
+            return bundled_path, "bundled", warning, choice
+        return system_path, "system", None, choice
     if system_path:
-        return system_path, "system", None
+        return system_path, "system", None, None
     if bundled_path:
-        return bundled_path, "bundled", None
-    return None, None, None
+        return bundled_path, "bundled", None, None
+    return None, None, None, None
 
 
-def find_adb_fastboot() -> ToolInfo:
+def find_adb_fastboot(preferred_source: dict = None) -> ToolInfo:
     """
     Attempts to find adb and fastboot executables.
     Prioritizes the system's own install (e.g. `android-tools`/`platform-tools`
     from the distro repos or installed directly from Google) over the copy
     bundled with this app, per-binary — UNLESS the system copy is an older
     version than the bundled one, in which case the (newer) bundled copy is
-    used and a warning is included so the caller can surface it.
+    used and a warning is included so the caller can surface it. Either
+    default can be overridden per-tool via `preferred_source`, e.g.
+    {"adb": "system", "fastboot": "bundled"} — see _resolve_tool().
     """
+    preferred_source = preferred_source or {}
     system_adb = shutil.which("adb")
     system_fastboot = shutil.which("fastboot")
 
@@ -164,8 +187,10 @@ def find_adb_fastboot() -> ToolInfo:
         if os.path.exists(candidate) and os.access(candidate, os.X_OK):
             bundled_fastboot = candidate
 
-    adb_path, adb_source, adb_warning = _resolve_tool("adb", system_adb, bundled_adb)
-    fastboot_path, fastboot_source, fastboot_warning = _resolve_tool("fastboot", system_fastboot, bundled_fastboot)
+    adb_path, adb_source, adb_warning, adb_choice = _resolve_tool(
+        "adb", system_adb, bundled_adb, preferred_source.get("adb"))
+    fastboot_path, fastboot_source, fastboot_warning, fastboot_choice = _resolve_tool(
+        "fastboot", system_fastboot, bundled_fastboot, preferred_source.get("fastboot"))
 
     for name, path, source in (("adb", adb_path, adb_source), ("fastboot", fastboot_path, fastboot_source)):
         if path:
@@ -174,7 +199,7 @@ def find_adb_fastboot() -> ToolInfo:
             log_message('warning', f"{name} not found on system PATH or bundled with the app.")
 
     warnings = [w for w in (adb_warning, fastboot_warning) if w]
-    return ToolInfo(adb_path, fastboot_path, adb_source, fastboot_source, warnings)
+    return ToolInfo(adb_path, fastboot_path, adb_source, fastboot_source, warnings, adb_choice, fastboot_choice)
 
 
 # --- Udev Rule Management (Linux Only) ---
